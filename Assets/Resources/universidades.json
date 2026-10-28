@@ -1,0 +1,86 @@
+{
+  "paises": [
+    {
+      "codigo": "CA",
+      "nombre": "Canadá",
+      "universidades": [
+        {
+          "id": "ca-demo-toronto",
+          "nombre": "Universidad Demo de Toronto",
+          "ciudad": "Toronto",
+          "modalidades": ["Intercambio", "Beca"],
+          "datosClave": [
+            { "etiqueta": "Duración", "valor": "1 semestre" },
+            { "etiqueta": "Idioma", "valor": "Inglés" },
+            { "etiqueta": "Vacantes", "valor": "4" },
+            { "etiqueta": "Cierre de postulación", "valor": "15 de marzo" }
+          ],
+          "requisitos": [
+            "Promedio ponderado mínimo de 14",
+            "Inglés B2 certificado (TOEFL iBT 80 o IELTS 6.5)",
+            "Haber aprobado al menos 4 ciclos",
+            "Carta de motivación"
+          ]
+        },
+        {
+          "id": "ca-demo-montreal",
+          "nombre": "Instituto Demo de Montreal",
+          "ciudad": "Montreal",
+          "modalidades": ["Intercambio", "Doble grado"],
+          "datosClave": [
+            { "etiqueta": "Duración", "valor": "2 semestres" },
+            { "etiqueta": "Idioma", "valor": "Francés e inglés" },
+            { "etiqueta": "Vacantes", "valor": "2" },
+            { "etiqueta": "Cierre de postulación", "valor": "30 de abril" }
+          ],
+          "requisitos": [
+            "Promedio ponderado mínimo de 15",
+            "Francés B1 o inglés B2",
+            "Entrevista con la oficina de relaciones internacionales"
+          ]
+        }
+      ]
+    },
+    {
+      "codigo": "JP",
+      "nombre": "Japón",
+      "universidades": [
+        {
+          "id": "jp-demo-tokio",
+          "nombre": "Universidad Demo de Tokio",
+          "ciudad": "Tokio",
+          "modalidades": ["Beca", "Intercambio", "Doble grado"],
+          "datosClave": [
+            { "etiqueta": "Duración", "valor": "1 año" },
+            { "etiqueta": "Idioma", "valor": "Inglés" },
+            { "etiqueta": "Cobertura de beca", "valor": "Matrícula y alojamiento" },
+            { "etiqueta": "Cierre de postulación", "valor": "1 de febrero" }
+          ],
+          "requisitos": [
+            "Promedio ponderado mínimo de 16",
+            "Inglés B2 certificado",
+            "Dos cartas de recomendación",
+            "Plan de estudios aprobado por la facultad"
+          ]
+        },
+        {
+          "id": "jp-demo-osaka",
+          "nombre": "Universidad Demo de Osaka",
+          "ciudad": "Osaka",
+          "modalidades": ["Intercambio"],
+          "datosClave": [
+            { "etiqueta": "Duración", "valor": "1 semestre" },
+            { "etiqueta": "Idioma", "valor": "Inglés o japonés" },
+            { "etiqueta": "Vacantes", "valor": "3" },
+            { "etiqueta": "Cierre de postulación", "valor": "15 de mayo" }
+          ],
+          "requisitos": [
+            "Promedio ponderado mínimo de 14",
+            "Inglés B2 o japonés JLPT N3",
+            "Seguro médico internacional"
+          ]
+        }
+      ]
+    }
+  ]
+}
