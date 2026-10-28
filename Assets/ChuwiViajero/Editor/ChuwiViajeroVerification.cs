@@ -9,7 +9,8 @@ using UnityEditor.SceneManagement;
 public static class ChuwiViajeroVerification
 {
     const string Stamp="Library/ChuwiViajeroVerified_v2.txt";
-    [InitializeOnLoadMethod]
+    // Auto-arranque desactivado: el candado vive en Library/ (Unity lo regenera), asi que se re-ejecutaba indefinidamente y modificaba assets del equipo sin confirmacion. Usar el menu.
+    // [InitializeOnLoadMethod]
     static void Schedule(){EditorApplication.delayCall+=()=>{if(!File.Exists(Stamp)&&!EditorApplication.isPlayingOrWillChangePlaymode)Verify();};}
     [MenuItem("Chuwi/Verificar version viajera")]
     public static void Verify()

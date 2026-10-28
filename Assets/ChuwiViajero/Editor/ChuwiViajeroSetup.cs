@@ -13,7 +13,11 @@ public static class ChuwiViajeroSetup
     const string Folder = "Assets/ChuwiViajero";
     const string ModelPath = Folder + "/Chuwi_Viajero.fbx";
     const string Stamp = "Library/ChuwiViajeroInstalled_v1.txt";
-    [InitializeOnLoadMethod]
+    // Ejecucion automatica desactivada: el candado (Stamp) vive en Library/, que Unity
+    // regenera, asi que el instalador se re-disparaba en cada recarga de scripts y
+    // generaba respaldos duplicados en Assets/ChuwiBackups. Usar el menu
+    // Chuwi -> Instalar version viajera conservando la anterior.
+    // [InitializeOnLoadMethod]
     static void Schedule()
     {
         EditorApplication.delayCall += () => {

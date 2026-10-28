@@ -9,7 +9,8 @@ using UnityEngine.SceneManagement;
 public static class ChuwiMapSetup
 {
     const string Stamp = "Library/ChuwiMapTravelInstalled.txt";
-    [InitializeOnLoadMethod] static void Schedule()
+    // Auto-arranque desactivado: el candado vive en Library/ (Unity lo regenera), asi que se re-ejecutaba indefinidamente y modificaba assets del equipo sin confirmacion. Usar el menu.
+    /* [InitializeOnLoadMethod] */ static void Schedule()
     {
         EditorApplication.delayCall += () => {
             if (!File.Exists(Stamp) && !EditorApplication.isPlayingOrWillChangePlaymode &&

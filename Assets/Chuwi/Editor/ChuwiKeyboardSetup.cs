@@ -10,7 +10,8 @@ public static class ChuwiKeyboardSetup
     const string Folder = "Assets/Chuwi";
     const string Stamp = "Library/ChuwiKeyboardInstalled_v1.txt";
 
-    [InitializeOnLoadMethod]
+    // Auto-arranque desactivado: el candado vive en Library/ (Unity lo regenera), asi que se re-ejecutaba indefinidamente y modificaba assets del equipo sin confirmacion. Usar el menu.
+    // [InitializeOnLoadMethod]
     static void InstallOnce()
     {
         EditorApplication.delayCall += () =>
