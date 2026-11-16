@@ -51,6 +51,7 @@ public sealed class ChuwiUI : MonoBehaviour
     void Awake()
     {
         if (travel == null) travel = FindFirstObjectByType<ChuwiMapTravel>(FindObjectsInactive.Include);
+        Screen.sleepTimeout = SleepTimeout.NeverSleep; // la tablet no se apaga durante la demo
         LoadResources();
         EnsureEventSystem();
         Build();
