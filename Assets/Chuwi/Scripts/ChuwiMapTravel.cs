@@ -22,6 +22,31 @@ public sealed class ChuwiMapTravel : MonoBehaviour
     public float feetOffset;
     public float pinSize = 6;
     public bool previewWithoutMarker;
+    [Tooltip("Menu gris de depuracion (OnGUI). La interfaz ChuwiUI lo apaga.")]
+    public bool showDebugMenu = true;
+
+    // ---- API para la interfaz (ChuwiUI) ----
+    public event Action<int> Departed;
+    public event Action<int> Arrived;
+    public bool IsTracked => tracked;
+    public bool IsVisible => tracked || previewWithoutMarker;
+    public bool IsMoving => moving;
+    public int Selected => selected;
+    public Animator CharacterAnimator => animator;
+    public void SetPreview(bool value) { previewWithoutMarker = value; }
+    public void Dance() { if (animator != null && !moving) animator.SetTrigger("Dance"); }
+    public void Greet() { if (animator != null && !moving) animator.SetTrigger("Greeting"); }
+    public float TravelProgress
+    {
+        get
+        {
+            if (selected < 0 || character == null || destinations[selected].anchor == null) return 0;
+            float total = Vector3.Distance(transform.InverseTransformPoint(travelStart), transform.InverseTransformPoint(destinations[selected].anchor.position));
+            float left = Vector3.Distance(transform.InverseTransformPoint(character.position), transform.InverseTransformPoint(destinations[selected].anchor.position));
+            return total < .0001f ? 1 : Mathf.Clamp01(1 - left / total);
+        }
+    }
+    Vector3 travelStart;
     ObserverBehaviour observer;
     Animator animator;
     ChuwiKeyboardController keyboard;
@@ -66,6 +91,8 @@ public sealed class ChuwiMapTravel : MonoBehaviour
     {
         if (!(tracked || previewWithoutMarker) || destinations == null || index < 0 || index >= destinations.Length || destinations[index].anchor == null) return;
         selected = index; moving = true;
+        travelStart = character != null ? character.position : Vector3.zero;
+        Departed?.Invoke(index);
         if (animator != null) { animator.ResetTrigger("Greeting"); animator.ResetTrigger("Pointing"); }
     }
     void LateUpdate()
@@ -95,6 +122,7 @@ public sealed class ChuwiMapTravel : MonoBehaviour
             if (!moving) character.position = transform.TransformPoint(goal);
             SetMoving(moving);
             if (!moving && animator != null) animator.SetTrigger("Pointing");
+            if (!moving) Arrived?.Invoke(selected);
         }
     }
     void ReadPointer()
@@ -109,7 +137,9 @@ public sealed class ChuwiMapTravel : MonoBehaviour
         pressed = Input.GetMouseButtonDown(0); point = Input.mousePosition;
 #endif
         float scale = Mathf.Max(1, Screen.height / 720f);
-        if (!pressed || point.x < 292 * scale || Camera.main == null) return;
+        if (!pressed || (showDebugMenu && point.x < 292 * scale) || Camera.main == null) return;
+        var es = UnityEngine.EventSystems.EventSystem.current;
+        if (es != null && es.IsPointerOverGameObject()) return;
         Ray ray = Camera.main.ScreenPointToRay(point);
         if (Physics.Raycast(ray, out RaycastHit hit))
             for (int i = 0; i < destinations.Length; i++)
@@ -117,7 +147,7 @@ public sealed class ChuwiMapTravel : MonoBehaviour
     }
     void OnGUI()
     {
-        if (destinations == null) return;
+        if (destinations == null || !showDebugMenu) return;
         float scale = Mathf.Max(1, Screen.height / 720f);
         Matrix4x4 old = GUI.matrix;
         GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one * scale);

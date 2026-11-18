@@ -1,0 +1,7 @@
+Backup: Assets/ChuwiBackups/Antes_Mixamo_20261116_002652.unity
+Idle: Chuwi_25k_Mixamo@Idle.fbx
+Walk: Chuwi_25k_Mixamo@Walk In Circle.fbx
+Greeting: Chuwi_25k_Mixamo@Waving.fbx
+Pointing: Chuwi_25k_Mixamo@Pointing.fbx
+Dance: Chuwi_25k_Mixamo@Hip Hop Dancing.fbx
+Altura final (m): 138.186
