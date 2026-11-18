@@ -27,8 +27,8 @@ public static class ChuwiAndroidBuild
         PlayerSettings.SetApplicationIdentifier(android, PackageId);
         PlayerSettings.SetScriptingBackend(android, ScriptingImplementation.IL2CPP);
         PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
-        if ((int)PlayerSettings.Android.minSdkVersion < 26)
-            PlayerSettings.Android.minSdkVersion = (AndroidSdkVersions)26;
+        if ((int)PlayerSettings.Android.minSdkVersion < 29)
+            PlayerSettings.Android.minSdkVersion = (AndroidSdkVersions)29; // Vuforia 11.4 exige Android 10 (API 29)
 
         // La interfaz se adapta a vertical y horizontal
         PlayerSettings.defaultInterfaceOrientation = UIOrientation.AutoRotation;
@@ -74,6 +74,7 @@ public static class ChuwiAndroidBuild
         }
 
         Configure();
+        WriteLog("Inicio. Plataforma activa: " + EditorUserBuildSettings.activeBuildTarget);
 
         if (EditorUserBuildSettings.activeBuildTarget != BuildTarget.Android)
         {
@@ -92,7 +93,10 @@ public static class ChuwiAndroidBuild
             targetGroup = BuildTargetGroup.Android,
             options = BuildOptions.None
         };
-        BuildReport report = BuildPipeline.BuildPlayer(options);
+        BuildReport report;
+        try { report = BuildPipeline.BuildPlayer(options); }
+        catch (System.Exception e) { WriteLog("EXCEPCION: " + e); Debug.LogException(e); return; }
+        WriteReport(report);
         var s = report.summary;
         string full = Path.GetFullPath(ApkPath);
         if (s.result == BuildResult.Succeeded)
@@ -104,5 +108,24 @@ public static class ChuwiAndroidBuild
         {
             Debug.LogError("[Chuwi] El APK falló: " + s.result + " con " + s.totalErrors + " errores. Revisa la consola.");
         }
+    }
+
+    const string LogPath = "Logs/chuwi_build.log";
+
+    static void WriteLog(string text)
+    {
+        try { Directory.CreateDirectory("Logs"); File.AppendAllText(LogPath, System.DateTime.Now.ToString("HH:mm:ss") + " " + text + "\n"); } catch { }
+    }
+
+    static void WriteReport(BuildReport report)
+    {
+        var s = report.summary;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Resultado: " + s.result + " | errores " + s.totalErrors + " | advertencias " + s.totalWarnings + " | target " + s.platform + " | activo " + EditorUserBuildSettings.activeBuildTarget);
+        foreach (var step in report.steps)
+            foreach (var m in step.messages)
+                if (m.type != LogType.Log)
+                    sb.AppendLine("[" + step.name + "] " + m.type + ": " + m.content);
+        WriteLog(sb.ToString());
     }
 }
