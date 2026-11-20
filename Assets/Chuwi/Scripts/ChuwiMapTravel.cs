@@ -21,6 +21,8 @@ public sealed class ChuwiMapTravel : MonoBehaviour
     public float speed = 40;
     public float feetOffset;
     public float pinSize = 6;
+    [Tooltip("Escala del contenido AR (la pone ChuwiARFit al ajustar el mapa o al hacer zoom).")]
+    public float contentScale = 1;
     public bool previewWithoutMarker;
     [Tooltip("Menu gris de depuracion (OnGUI). La interfaz ChuwiUI lo apaga.")]
     public bool showDebugMenu = true;
@@ -69,7 +71,7 @@ public sealed class ChuwiMapTravel : MonoBehaviour
         mapRenderers = map != null ? map.GetComponentsInChildren<Renderer>(true) : new Renderer[0];
         greeted = false; moving = false; selected = -1;
         if (character != null && destinations != null && destinations.Length > 0)
-            character.position = transform.TransformPoint(transform.InverseTransformPoint(destinations[0].anchor.position) + Vector3.up * feetOffset);
+            character.position = transform.TransformPoint(transform.InverseTransformPoint(destinations[0].anchor.position) + Vector3.up * feetOffset * contentScale);
         if (observer != null) OnStatus(observer, observer.TargetStatus);
     }
     void OnDisable()
@@ -110,10 +112,10 @@ public sealed class ChuwiMapTravel : MonoBehaviour
         if (!greeted) { greeted = true; if (animator != null) animator.SetTrigger("Greeting"); }
         if (moving && selected >= 0 && character != null)
         {
-            Vector3 goal = transform.InverseTransformPoint(destinations[selected].anchor.position) + Vector3.up * feetOffset;
+            Vector3 goal = transform.InverseTransformPoint(destinations[selected].anchor.position) + Vector3.up * feetOffset * contentScale;
             Vector3 current = transform.InverseTransformPoint(character.position);
             Vector3 delta = goal - current;
-            Vector3 next = Vector3.MoveTowards(current, goal, speed * Mathf.Max(0, deltaTime));
+            Vector3 next = Vector3.MoveTowards(current, goal, speed * contentScale * Mathf.Max(0, deltaTime));
             character.position = transform.TransformPoint(next);
             Vector3 forward = Vector3.ProjectOnPlane(transform.TransformDirection(delta), transform.up);
             if (forward.sqrMagnitude > .0001f)

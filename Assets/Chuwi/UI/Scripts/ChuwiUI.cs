@@ -19,6 +19,10 @@ public sealed class ChuwiUI : MonoBehaviour
     public ChuwiMapTravel travel;
     [Tooltip("Mostrar la pantalla de bienvenida al abrir la app.")]
     public bool showWelcome = true;
+    [Tooltip("La app solo se usa en horizontal (el mapa se ve completo en celular y tablet).")]
+    public bool soloHorizontal = true;
+    [Tooltip("Volumen de la música cuando Chuwi baila.")]
+    [Range(0, 1)] public float musicVolume = 0.8f;
 
     // ---------- Paleta (estilo del Figma) ----------
     static readonly Color Red = Hex("C8102E"), RedDark = Hex("9E0C24"), Navy = Hex("1B2A4A"), Orange = Hex("F28C28"),
@@ -46,17 +50,24 @@ public sealed class ChuwiUI : MonoBehaviour
     bool seenMarker, landscape, layoutDirty = true;
     Vector2 lastScreen; Rect lastSafe;
     float bubbleTimer;
+    float uiK = 1, unitsW = 1920, unitsH = 1080; // escala segun el tamaño fisico de la pantalla
+    AudioSource music; AudioClip danceClip; Coroutine danceCo;
+    ChuwiARFit fit; bool zoomHintShown;
 
     // ======================================================================
     void Awake()
     {
         if (travel == null) travel = FindFirstObjectByType<ChuwiMapTravel>(FindObjectsInactive.Include);
         Screen.sleepTimeout = SleepTimeout.NeverSleep; // la tablet no se apaga durante la demo
+        if (soloHorizontal) StartCoroutine(LockLandscape());
         LoadResources();
         EnsureEventSystem();
         Build();
         if (travel != null)
         {
+            fit = GetComponent<ChuwiARFit>();
+            if (fit == null) fit = gameObject.AddComponent<ChuwiARFit>();
+            fit.Setup(travel);
             travel.showDebugMenu = false;
             travel.Departed += OnDeparted;
             travel.Arrived += OnArrived;
@@ -101,6 +112,11 @@ public sealed class ChuwiUI : MonoBehaviour
 
         bool visible = travel != null && travel.IsVisible;
         if (visible) seenMarker = true;
+        if (visible && !zoomHintShown && state == State.Map && bubbleTimer <= 0)
+        {
+            zoomHintShown = true;
+            SetBubble("Usa dos dedos para agrandar o achicar el mapa.", 4.5f);
+        }
         bool inApp = state != State.Welcome;
 
         Fade(scanner, inApp && !visible, 6);
@@ -162,6 +178,7 @@ public sealed class ChuwiUI : MonoBehaviour
     {
         if (index < 0 || index >= travel.destinations.Length) return;
         string c = travel.destinations[index].country;
+        StopDanceMusic();
         travelTitle.text = index == 0 ? "Volviendo a ESAN" : "Viajando a " + c;
         state = State.Travel; ShowPanel(State.Travel, false);
         SetBubble(index == 0 ? "¡Volvemos a casa!" : "¡Vamos a " + c + "!", 999);
@@ -226,9 +243,48 @@ public sealed class ChuwiUI : MonoBehaviour
 
     void Dance()
     {
-        if (travel == null) return;
+        if (travel == null || travel.IsMoving) return;
         travel.Dance();
         SetBubble("¡A bailar!");
+        if (danceClip != null && music != null)
+        {
+            if (danceCo != null) StopCoroutine(danceCo);
+            danceCo = StartCoroutine(DanceMusic());
+        }
+    }
+
+    // La musica suena mientras dura la animacion de baile y luego se apaga suave.
+    IEnumerator DanceMusic()
+    {
+        music.clip = danceClip; music.loop = true; music.volume = musicVolume; music.time = 0; music.Play();
+        var an = travel != null ? travel.CharacterAnimator : null;
+        float t = 0;
+        // esperar a que el Animator entre al estado de baile
+        while (t < 1.5f && an != null && an.isActiveAndEnabled && (t < .3f || an.IsInTransition(0))) { t += Time.deltaTime; yield return null; }
+        int danceHash = an != null && an.isActiveAndEnabled ? an.GetCurrentAnimatorStateInfo(0).fullPathHash : 0;
+        while (t < 30f)
+        {
+            if (an == null || !an.isActiveAndEnabled) { if (t > 12f) break; }
+            else if (!an.IsInTransition(0) && an.GetCurrentAnimatorStateInfo(0).fullPathHash != danceHash) break;
+            t += Time.deltaTime; yield return null;
+        }
+        for (float x = 0; x < .8f; x += Time.deltaTime) { music.volume = Mathf.Lerp(musicVolume, 0, x / .8f); yield return null; }
+        music.Stop(); music.volume = musicVolume; danceCo = null;
+    }
+
+    void StopDanceMusic()
+    {
+        if (danceCo != null) { StopCoroutine(danceCo); danceCo = null; }
+        if (music != null) music.Stop();
+    }
+
+    IEnumerator LockLandscape()
+    {
+        Screen.autorotateToPortrait = false; Screen.autorotateToPortraitUpsideDown = false;
+        Screen.autorotateToLandscapeLeft = true; Screen.autorotateToLandscapeRight = true;
+        if (Screen.height > Screen.width) Screen.orientation = ScreenOrientation.LandscapeLeft;
+        yield return new WaitForSecondsRealtime(.5f);
+        Screen.orientation = ScreenOrientation.AutoRotation; // gira entre los dos horizontales
     }
 
     // ======================================================================
@@ -243,6 +299,8 @@ public sealed class ChuwiUI : MonoBehaviour
         iBack = LoadSprite("icon_back", 0); iDance = LoadSprite("icon_dance", 0); iPin = LoadSprite("icon_pin", 0);
         iMail = LoadSprite("icon_mail", 0); iCamera = LoadSprite("icon_camera", 0); iPlane = LoadSprite("icon_plane", 0);
         iClose = LoadSprite("icon_close", 0); iStar = LoadSprite("icon_star", 0);
+        danceClip = Resources.Load<AudioClip>("ChuwiUI/chuwi_baile");
+        if (danceClip == null) Debug.LogWarning("[Chuwi] No encontré la música del baile en Resources/ChuwiUI/chuwi_baile");
     }
 
     static Font LoadFont(string n)
@@ -281,6 +339,8 @@ public sealed class ChuwiUI : MonoBehaviour
         scaler.referenceResolution = new Vector2(1080, 1920);
         root.AddComponent<GraphicRaycaster>();
         safe = Rect("Safe", root.transform); Stretch(safe);
+        music = gameObject.AddComponent<AudioSource>();
+        music.playOnAwake = false; music.spatialBlend = 0; music.loop = true; music.volume = musicVolume;
 
         BuildScanner();
         BuildHud();
@@ -545,7 +605,7 @@ public sealed class ChuwiUI : MonoBehaviour
 
             var go = new GameObject("Tarjeta " + d.country, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
             go.transform.SetParent(cardRow, false);
-            var le = go.GetComponent<LayoutElement>(); le.preferredWidth = 300; le.preferredHeight = 400; le.minHeight = 400;
+            var le = go.GetComponent<LayoutElement>(); le.preferredWidth = 280; le.preferredHeight = 340; le.minHeight = 300;
             var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.color = idx == 0 ? Cream : Bg;
             img.pixelsPerUnitMultiplier = 44f / 34f;
             var rt = (RectTransform)go.transform;
@@ -655,8 +715,16 @@ public sealed class ChuwiUI : MonoBehaviour
         layoutDirty = false;
         lastScreen = new Vector2(Screen.width, Screen.height); lastSafe = Screen.safeArea;
         landscape = Screen.width > Screen.height;
-        scaler.referenceResolution = landscape ? new Vector2(1920, 1080) : new Vector2(1080, 1920);
+        // Responsive: en tablets (pantalla fisica mas grande) la interfaz se ve proporcionalmente mas chica
+        // para dejar mas espacio al mapa; en celulares se mantiene legible.
+        float shortPx = Mathf.Max(1, Mathf.Min(Screen.width, Screen.height));
+        float shortIn = Screen.dpi > 1 ? shortPx / Screen.dpi : 0;
+        uiK = shortIn > 0 ? Mathf.Clamp(Mathf.Sqrt(shortIn / 2.7f), 1f, 1.4f) : 1f;
+        scaler.referenceResolution = landscape ? new Vector2(1920 * uiK, 1080 * uiK) : new Vector2(1080 * uiK, 1920 * uiK);
         scaler.matchWidthOrHeight = landscape ? 1 : 0;
+        float unitsPerPx = 1080 * uiK / shortPx;
+        unitsW = Screen.width * unitsPerPx; unitsH = Screen.height * unitsPerPx;
+        Log("Layout " + Screen.width + "x" + Screen.height + " dpi=" + Screen.dpi + " k=" + uiK + " unidades=" + unitsW + "x" + unitsH);
 
         // Safe area (notch)
         var sa = Screen.safeArea;
@@ -671,10 +739,12 @@ public sealed class ChuwiUI : MonoBehaviour
         {
             // hoja a la derecha
             sheetRect.anchorMin = new Vector2(1, 0); sheetRect.anchorMax = new Vector2(1, 1); sheetRect.pivot = new Vector2(1, .5f);
-            sheetRect.sizeDelta = new Vector2(800, -60); sheetRect.anchoredPosition = new Vector2(-30, 0);
+            float sheetW = Mathf.Clamp(unitsW * .38f, 640, 820);
+            sheetRect.sizeDelta = new Vector2(sheetW, -60); sheetRect.anchoredPosition = new Vector2(-30, 0);
             bubbleRect.anchorMin = bubbleRect.anchorMax = new Vector2(0, 1); bubbleRect.pivot = new Vector2(0, 1);
-            bubbleRect.anchoredPosition = new Vector2(30, -190); bubbleRect.sizeDelta = new Vector2(760, 140);
-            ((RectTransform)hud.transform).offsetMax = new Vector2(-860, ((RectTransform)hud.transform).offsetMax.y);
+            bubbleRect.anchoredPosition = new Vector2(30, -190);
+            bubbleRect.sizeDelta = new Vector2(Mathf.Clamp(unitsW - sheetW - 120, 480, 760), 140);
+            ((RectTransform)hud.transform).offsetMax = new Vector2(-(sheetW + 60), ((RectTransform)hud.transform).offsetMax.y);
             welcomeArt.anchorMin = welcomeArt.anchorMax = new Vector2(.27f, .48f); welcomeArt.sizeDelta = Vector2.zero;
             welcomeArt.localScale = Vector3.one * .95f;
             welcomeText.anchorMin = new Vector2(.5f, .5f); welcomeText.anchorMax = new Vector2(.97f, .5f);
@@ -699,7 +769,8 @@ public sealed class ChuwiUI : MonoBehaviour
     void SizeSheet(bool animate)
     {
         if (landscape) return;
-        float h = state == State.Info ? 1150 : state == State.Travel ? 330 : 700;
+        // En vertical la hoja nunca tapa mas de la mitad de la pantalla
+        float h = state == State.Info ? Mathf.Min(1150, unitsH * .5f) : state == State.Travel ? 330 : Mathf.Min(660, unitsH * .34f);
         sheetRect.sizeDelta = new Vector2(-30, h + 40);
     }
 
