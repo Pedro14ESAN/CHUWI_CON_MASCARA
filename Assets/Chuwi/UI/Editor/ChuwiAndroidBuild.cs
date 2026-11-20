@@ -28,11 +28,11 @@ public static class ChuwiAndroidBuild
         PlayerSettings.SetScriptingBackend(android, ScriptingImplementation.IL2CPP);
         PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
         if ((int)PlayerSettings.Android.minSdkVersion < 29)
-            PlayerSettings.Android.minSdkVersion = (AndroidSdkVersions)29; // Vuforia 11.4 exige Android 10 (API 29)
+            PlayerSettings.Android.minSdkVersion = (AndroidSdkVersions)29; // Vuforia exige Android 10+
 
-        // La interfaz se adapta a vertical y horizontal
+        // Solo horizontal: el mapa se ve completo y la interfaz se adapta a celular o tablet
         PlayerSettings.defaultInterfaceOrientation = UIOrientation.AutoRotation;
-        PlayerSettings.allowedAutorotateToPortrait = true;
+        PlayerSettings.allowedAutorotateToPortrait = false;
         PlayerSettings.allowedAutorotateToPortraitUpsideDown = false;
         PlayerSettings.allowedAutorotateToLandscapeLeft = true;
         PlayerSettings.allowedAutorotateToLandscapeRight = true;
