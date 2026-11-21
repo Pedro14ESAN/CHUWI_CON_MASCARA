@@ -15,7 +15,13 @@ public sealed class ChuwiARFit : MonoBehaviour
     [Tooltip("Ancho del mapa comparado con el ancho del marcador (1 = mismo ancho que el marcador).")]
     public float mapWidthVsMarker = 1.2f;
     [Tooltip("Tamaño de Chuwi comparado con su tamaño original en la escena.")]
-    public float characterScale = 0.7f;
+    public float characterScale = 1f;
+    [Tooltip("Gira el mapa para que el norte quede arriba del marcador (el mapa se ve horizontal con el celular en horizontal).")]
+    public bool northUp = true;
+    [Tooltip("Giro extra del mapa en grados, por si el marcador se usa de costado.")]
+    public float extraRotation = 0;
+    [Tooltip("Chuwi mira hacia la cámara cuando está quieto.")]
+    public bool faceCamera = true;
     [Tooltip("Zoom mínimo y máximo al pellizcar.")]
     public float minZoom = 0.5f, maxZoom = 2.5f;
 
@@ -24,7 +30,7 @@ public sealed class ChuwiARFit : MonoBehaviour
 
     ChuwiMapTravel travel;
     Transform target, content;
-    Vector3 center;
+    Vector3 center; Quaternion rot = Quaternion.identity;
     float baseScale = 1, zoom = 1, pinchStartDist, pinchStartZoom;
     bool pinching;
 
@@ -51,8 +57,10 @@ public sealed class ChuwiARFit : MonoBehaviour
         center = ok ? new Vector3(b.center.x, 0, b.center.z) : Vector3.zero;
         baseScale = mapW > .001f ? Mathf.Clamp(mapWidthVsMarker * markerW / mapW, .05f, 1f) : 1f;
         if (baseScale >= .999f) center = Vector3.zero; // si ya cabe, no lo movemos
+        float ang = northUp ? NorthUpAngle() : 0;
+        rot = Quaternion.Euler(0, ang + extraRotation, 0);
         Apply();
-        ChuwiUI.Log("ARFit: marcador=" + markerW + " mapa=" + mapW + " escala=" + baseScale);
+        ChuwiUI.Log("ARFit: marcador=" + markerW + " mapa=" + mapW + " escala=" + baseScale + " giro=" + (ang + extraRotation));
     }
 
     public void ResetZoom() { zoom = 1; Apply(); }
@@ -62,8 +70,49 @@ public sealed class ChuwiARFit : MonoBehaviour
         if (content == null) return;
         float s = baseScale * zoom;
         content.localScale = Vector3.one * s;
-        content.localPosition = -center * s;
+        content.localRotation = rot;
+        content.localPosition = -(rot * center) * s;
         if (travel != null) travel.contentScale = s;
+    }
+
+    // Calcula cuanto girar el mapa (eje Y del marcador) para que el norte apunte a +Z, que es la parte
+    // de arriba de la imagen del marcador. Usa los pines: Canada/EE.UU. al norte, Argentina/Chile al sur.
+    float NorthUpAngle()
+    {
+        Vector3 n, sur, oeste, este;
+        if (!Pin(out n, "Canad", "Estados Unidos") || !Pin(out sur, "Argentina", "Chile")) return 0;
+        var north = Vector3.ProjectOnPlane(n - sur, Vector3.up);
+        if (north.sqrMagnitude < 1e-6f) return 0;
+        float ang = Vector3.SignedAngle(north, Vector3.forward, Vector3.up);
+        if (Pin(out oeste, "Per", "Colombia") && Pin(out este, "Jap", "Corea", "China"))
+        {
+            var east = Quaternion.Euler(0, ang, 0) * Vector3.ProjectOnPlane(este - oeste, Vector3.up);
+            if (east.x < 0) ChuwiUI.Log("ARFit: el mapa parece espejado (el este queda a la izquierda)");
+        }
+        return Mathf.Round(ang / 90f) * 90f; // el mapa es rectangular: giros de 90 grados
+    }
+
+    bool Pin(out Vector3 local, params string[] names)
+    {
+        local = Vector3.zero;
+        if (travel.destinations == null) return false;
+        foreach (var nm in names)
+            foreach (var d in travel.destinations)
+                if (d != null && d.anchor != null && d.country != null && d.country.StartsWith(nm))
+                { local = content.InverseTransformPoint(d.anchor.position); return true; }
+        return false;
+    }
+
+    void LateUpdate()
+    {
+        // Chuwi voltea hacia la cámara cuando no está viajando, para que se le vea la cara.
+        if (!faceCamera || content == null || travel == null || travel.character == null || travel.IsMoving || !travel.IsVisible) return;
+        var cam = Camera.main; if (cam == null) return;
+        var up = target.up;
+        var dir = Vector3.ProjectOnPlane(cam.transform.position - travel.character.position, up);
+        if (dir.sqrMagnitude < 1e-4f) return;
+        var want = Quaternion.LookRotation(dir.normalized, up);
+        travel.character.rotation = Quaternion.RotateTowards(travel.character.rotation, want, 240 * Time.deltaTime);
     }
 
     float MarkerWidth()
