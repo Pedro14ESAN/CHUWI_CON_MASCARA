@@ -24,6 +24,19 @@ public sealed class ChuwiUI : MonoBehaviour
     [Tooltip("Volumen de la música cuando Chuwi baila.")]
     [Range(0, 1)] public float musicVolume = 0.8f;
 
+    [Serializable] public class AjusteHimno
+    {
+        [Tooltip("Código del país: PE, CA, US, MX, CO, BR, CL, AR, CN, KR, JP, TW, TH")] public string codigo;
+        [Tooltip("Segundo donde empieza el coro dentro del archivo (0 si el archivo ya es solo el coro).")] public float inicio;
+        [Tooltip("Cuántos segundos suena (0 = hasta el final del archivo).")] public float duracion;
+    }
+    [Header("Himnos (coro mientras Chuwi viaja)")]
+    [Tooltip("Los audios van en Assets/Chuwi/UI/Resources/ChuwiUI/Himnos con el código del país como nombre: US.mp3, JP.mp3, PE.mp3...")]
+    [Range(0, 1)] public float anthemVolume = 0.9f;
+    [Tooltip("Tope de segundos del coro si el archivo es más largo.")]
+    public float anthemMaxSeconds = 30f;
+    public List<AjusteHimno> ajustesHimnos = new List<AjusteHimno>();
+
     // ---------- Paleta (estilo del Figma) ----------
     static readonly Color Red = Hex("C8102E"), RedDark = Hex("9E0C24"), Navy = Hex("1B2A4A"), Orange = Hex("F28C28"),
         Bg = Hex("F5F6F8"), White = Color.white, Muted = Hex("6B7690"), Line = Hex("E3E6EC"), Cream = Hex("FFF4E8");
@@ -52,7 +65,12 @@ public sealed class ChuwiUI : MonoBehaviour
     float bubbleTimer;
     float uiK = 1, unitsW = 1920, unitsH = 1080; // escala segun el tamaño fisico de la pantalla
     AudioSource music; AudioClip danceClip; Coroutine danceCo;
+    AudioSource anthem; Coroutine anthemCo;
     ChuwiARFit fit; bool zoomHintShown;
+    // Registro y estrellas
+    CanvasGroup register, ranking; InputField inCode, inName; Text regError, rankingEmpty;
+    RectTransform rankingList, starsRect; readonly Image[] starImgs = new Image[ChuwiProgreso.MaxEstrellas];
+    bool registerOpen;
 
     // ======================================================================
     void Awake()
@@ -150,7 +168,7 @@ public sealed class ChuwiUI : MonoBehaviour
     // Si el EventSystem no entrega el clic, detectamos el toque sobre el boton de inicio directamente.
     void WelcomeFallback()
     {
-        if (state != State.Welcome || startButton == null) return;
+        if (state != State.Welcome || startButton == null || registerOpen) return;
         Vector2 p; bool pressed = false;
 #if ENABLE_INPUT_SYSTEM
         if (UnityEngine.InputSystem.Touchscreen.current != null && UnityEngine.InputSystem.Touchscreen.current.primaryTouch.press.wasReleasedThisFrame)
@@ -179,6 +197,7 @@ public sealed class ChuwiUI : MonoBehaviour
         if (index < 0 || index >= travel.destinations.Length) return;
         string c = travel.destinations[index].country;
         StopDanceMusic();
+        PlayAnthem(c);
         travelTitle.text = index == 0 ? "Volviendo a ESAN" : "Viajando a " + c;
         state = State.Travel; ShowPanel(State.Travel, false);
         SetBubble(index == 0 ? "¡Volvemos a casa!" : "¡Vamos a " + c + "!", 999);
@@ -201,14 +220,49 @@ public sealed class ChuwiUI : MonoBehaviour
         OpenInfo(index);
     }
 
+    // "Explorar con Chuwi": primero el registro (código y nombre), luego empieza.
     void StartApp()
+    {
+        if (state != State.Welcome || registerOpen) return;
+        OpenRegister();
+    }
+
+    void OpenRegister()
+    {
+        registerOpen = true;
+        inCode.text = ChuwiProgreso.UltimoCodigo; inName.text = ChuwiProgreso.UltimoNombre;
+        regError.text = "";
+        register.alpha = 1; register.blocksRaycasts = true; register.interactable = true;
+        StartCoroutine(PopIn((RectTransform)register.transform.GetChild(1)));
+    }
+
+    void CloseRegister()
+    {
+        registerOpen = false;
+        register.alpha = 0; register.blocksRaycasts = false; register.interactable = false;
+    }
+
+    void ConfirmRegister()
+    {
+        string code = inCode.text.Trim(), name = inName.text.Trim();
+        if (code.Length < 3) { regError.text = "Escribe tu código de alumno."; return; }
+        if (name.Length < 2) { regError.text = "Escribe tu nombre."; return; }
+        var a = ChuwiProgreso.Registrar(code, name);
+        CloseRegister();
+        BeginExplore();
+        RefreshStars();
+        string first = a.nombre.Split(' ')[0];
+        SetBubble(a.paises.Count == 0 ? "¡Hola, " + first + "! Explora países y gana estrellas."
+            : "¡Hola de nuevo, " + first + "! Tienes " + a.Estrellas() + " de 5 estrellas.", 5f);
+    }
+
+    void BeginExplore()
     {
         if (state != State.Welcome) return;
         Log("StartApp");
         state = State.Map;
         StartCoroutine(FadeOut(welcome, .35f));
         ShowPanel(State.Map, true);
-        SetBubble("¡Hola! ¿A dónde viajamos?");
     }
 
     void SelectCountry(int index)
@@ -233,6 +287,19 @@ public sealed class ChuwiUI : MonoBehaviour
         BuildTabs(info);
         FillInfo(info);
         state = State.Info; ShowPanel(State.Info, false);
+        if (index > 0 && ChuwiProgreso.Visitar(ChuwiDestinos.Code(dest.country)))
+        {
+            int n = ChuwiProgreso.Actual.Estrellas();
+            RefreshStars(); StartCoroutine(PopIn(starsRect));
+            SetBubble(n >= ChuwiProgreso.MaxEstrellas ? "¡Increíble! Ya tienes las 5 estrellas." : "¡Ganaste una estrella! Ya tienes " + n + " de 5.", 4.5f);
+            if (travel != null) travel.Greet();
+        }
+    }
+
+    void RefreshStars()
+    {
+        int n = ChuwiProgreso.Actual != null ? ChuwiProgreso.Actual.Estrellas() : 0;
+        for (int i = 0; i < starImgs.Length; i++) if (starImgs[i] != null) starImgs[i].color = i < n ? Orange : Line;
     }
 
     void BackToMap()
@@ -246,6 +313,7 @@ public sealed class ChuwiUI : MonoBehaviour
         if (travel == null || travel.IsMoving) return;
         travel.Dance();
         SetBubble("¡A bailar!");
+        StopAnthem(.4f);
         if (danceClip != null && music != null)
         {
             if (danceCo != null) StopCoroutine(danceCo);
@@ -276,6 +344,49 @@ public sealed class ChuwiUI : MonoBehaviour
     {
         if (danceCo != null) { StopCoroutine(danceCo); danceCo = null; }
         if (music != null) music.Stop();
+    }
+
+    // ---------- Himnos ----------
+    void PlayAnthem(string country)
+    {
+        if (anthem == null) return;
+        string code = ChuwiDestinos.Code(country);
+        var clip = Resources.Load<AudioClip>("ChuwiUI/Himnos/" + code);
+        if (anthemCo != null) { StopCoroutine(anthemCo); anthemCo = null; }
+        anthem.Stop();
+        if (clip == null) { Debug.Log("[Chuwi] No hay himno para " + code + " en Resources/ChuwiUI/Himnos"); return; }
+        float start = 0, dur = 0;
+        foreach (var a in ajustesHimnos)
+            if (a != null && string.Equals(a.codigo, code, StringComparison.OrdinalIgnoreCase)) { start = a.inicio; dur = a.duracion; break; }
+        anthemCo = StartCoroutine(AnthemRoutine(clip, start, dur));
+    }
+
+    IEnumerator AnthemRoutine(AudioClip clip, float start, float dur)
+    {
+        anthem.clip = clip; anthem.loop = false; anthem.volume = anthemVolume;
+        anthem.time = Mathf.Clamp(start, 0, Mathf.Max(0, clip.length - .1f));
+        anthem.Play();
+        float len = clip.length - anthem.time;
+        if (dur > 0) len = Mathf.Min(len, dur);
+        len = Mathf.Min(len, anthemMaxSeconds);
+        float t = 0;
+        while (t < len - 1.2f && anthem.isPlaying) { t += Time.deltaTime; yield return null; }
+        for (float x = 0; x < 1.2f && anthem.isPlaying; x += Time.deltaTime) { anthem.volume = Mathf.Lerp(anthemVolume, 0, x / 1.2f); yield return null; }
+        anthem.Stop(); anthem.volume = anthemVolume; anthemCo = null;
+    }
+
+    void StopAnthem(float fade)
+    {
+        if (anthem == null || !anthem.isPlaying) return;
+        if (anthemCo != null) StopCoroutine(anthemCo);
+        anthemCo = StartCoroutine(FadeAnthem(fade));
+    }
+
+    IEnumerator FadeAnthem(float fade)
+    {
+        float v = anthem.volume;
+        for (float x = 0; x < fade; x += Time.deltaTime) { anthem.volume = Mathf.Lerp(v, 0, x / fade); yield return null; }
+        anthem.Stop(); anthem.volume = anthemVolume; anthemCo = null;
     }
 
     IEnumerator LockLandscape()
@@ -341,12 +452,129 @@ public sealed class ChuwiUI : MonoBehaviour
         safe = Rect("Safe", root.transform); Stretch(safe);
         music = gameObject.AddComponent<AudioSource>();
         music.playOnAwake = false; music.spatialBlend = 0; music.loop = true; music.volume = musicVolume;
+        anthem = gameObject.AddComponent<AudioSource>();
+        anthem.playOnAwake = false; anthem.spatialBlend = 0; anthem.loop = false; anthem.volume = anthemVolume;
 
         BuildScanner();
         BuildHud();
         BuildBubble();
         BuildSheet();
         BuildWelcome(root.transform); // encima de todo (fuera del safe area para cubrir la pantalla)
+        BuildRegister(root.transform);
+        BuildRanking(root.transform);
+        RefreshStars();
+    }
+
+    // ---------------- Registro (código y nombre) ----------------
+    void BuildRegister(Transform parent)
+    {
+        var r = Rect("Registro", parent); Stretch(r);
+        register = r.gameObject.AddComponent<CanvasGroup>(); register.alpha = 0; register.blocksRaycasts = false; register.interactable = false;
+        var dim = Img(r, null, new Color(.05f, .08f, .16f, .6f)); Stretch(dim.rectTransform); dim.raycastTarget = true;
+        var db = dim.gameObject.AddComponent<Button>(); db.transition = Selectable.Transition.None; db.onClick.AddListener(CloseRegister);
+
+        var card = Rect("Tarjeta", r); Center(card, new Vector2(0, 40), new Vector2(880, 760));
+        Shadow(card);
+        var bg = Img(card, sRound, White); Stretch(bg.rectTransform); bg.raycastTarget = true;
+        var t = Txt(card, "¿Quién explora hoy?", fBlack, 54, Navy, TextAnchor.MiddleCenter);
+        Anchor(t.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -80), new Vector2(-80, 80));
+        var sub = Txt(card, "Escribe tu código y tu nombre. Ganas una estrella por cada 2 países que explores.", fRegular, 29, Muted, TextAnchor.UpperCenter);
+        Anchor(sub.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -170), new Vector2(-120, 90));
+        inCode = MakeInput(card, "Código de alumno", InputField.ContentType.Alphanumeric);
+        Anchor((RectTransform)inCode.transform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -300), new Vector2(-120, 110));
+        inName = MakeInput(card, "Nombre y apellido", InputField.ContentType.Name);
+        Anchor((RectTransform)inName.transform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -430), new Vector2(-120, 110));
+        regError = Txt(card, "", fSemi, 27, Red, TextAnchor.MiddleCenter);
+        Anchor(regError.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -520), new Vector2(-120, 50));
+        var go = BigButton(card, "Empezar", Red, White, iPlane, ConfirmRegister);
+        Anchor(go, new Vector2(.5f, 0), new Vector2(.5f, 0), new Vector2(0, 50), new Vector2(620, 130)); go.pivot = new Vector2(.5f, 0);
+    }
+
+    InputField MakeInput(RectTransform parent, string placeholder, InputField.ContentType type)
+    {
+        var bg = Img(parent, sRound, Bg); bg.raycastTarget = true; bg.pixelsPerUnitMultiplier = 44f / 30f;
+        var f = bg.gameObject.AddComponent<InputField>();
+        var ph = Txt(bg.rectTransform, placeholder, fRegular, 34, Muted, TextAnchor.MiddleLeft);
+        Stretch(ph.rectTransform); ph.rectTransform.offsetMin = new Vector2(36, 0); ph.rectTransform.offsetMax = new Vector2(-36, 0);
+        var tx = Txt(bg.rectTransform, "", fSemi, 34, Navy, TextAnchor.MiddleLeft); tx.supportRichText = false;
+        Stretch(tx.rectTransform); tx.rectTransform.offsetMin = new Vector2(36, 0); tx.rectTransform.offsetMax = new Vector2(-36, 0);
+        f.textComponent = tx; f.placeholder = ph; f.targetGraphic = bg;
+        f.contentType = type; f.lineType = InputField.LineType.SingleLine; f.characterLimit = 40;
+        return f;
+    }
+
+    // ---------------- Exploradores destacados ----------------
+    void BuildRanking(Transform parent)
+    {
+        var r = Rect("Ranking", parent); Stretch(r);
+        ranking = r.gameObject.AddComponent<CanvasGroup>(); ranking.alpha = 0; ranking.blocksRaycasts = false; ranking.interactable = false;
+        var dim = Img(r, null, new Color(.05f, .08f, .16f, .6f)); Stretch(dim.rectTransform); dim.raycastTarget = true;
+        var db = dim.gameObject.AddComponent<Button>(); db.transition = Selectable.Transition.None; db.onClick.AddListener(CloseRanking);
+
+        var card = Rect("Tarjeta", r); Center(card, Vector2.zero, new Vector2(1000, 900));
+        Shadow(card);
+        var bg = Img(card, sRound, White); Stretch(bg.rectTransform); bg.raycastTarget = true;
+        var badge = Img(card, sCircle, Orange); Anchor(badge.rectTransform, new Vector2(0, 1), new Vector2(0, 1), new Vector2(50, -45), new Vector2(110, 110));
+        badge.rectTransform.pivot = new Vector2(0, 1);
+        var bi = Img(badge.rectTransform, iStar, White); Center(bi.rectTransform, Vector2.zero, new Vector2(60, 60));
+        var t = Txt(card, "Exploradores destacados", fBlack, 46, Navy, TextAnchor.MiddleLeft);
+        Anchor(t.rectTransform, new Vector2(0, 1), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        t.rectTransform.offsetMin = new Vector2(185, -110); t.rectTransform.offsetMax = new Vector2(-150, -45);
+        var st = Txt(card, "Alumnos con " + ChuwiProgreso.MinDestacado + " estrellas o más en este dispositivo", fRegular, 26, Muted, TextAnchor.MiddleLeft);
+        Anchor(st.rectTransform, new Vector2(0, 1), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        st.rectTransform.offsetMin = new Vector2(185, -160); st.rectTransform.offsetMax = new Vector2(-150, -110);
+        var close = RoundIconButton(card, iClose, Bg, CloseRanking, Navy);
+        Anchor((RectTransform)close.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-40, -45), new Vector2(100, 100));
+        ((RectTransform)close.transform).pivot = new Vector2(1, 1);
+
+        var sc = ScrollV(card, out rankingList);
+        var sr = (RectTransform)sc.transform; sr.anchorMin = Vector2.zero; sr.anchorMax = Vector2.one;
+        sr.offsetMin = new Vector2(40, 40); sr.offsetMax = new Vector2(-40, -200);
+        rankingEmpty = Txt(card, "Todavía nadie tiene " + ChuwiProgreso.MinDestacado + " estrellas. ¡Explora más países con Chuwi!", fSemi, 32, Muted, TextAnchor.MiddleCenter);
+        Anchor(rankingEmpty.rectTransform, new Vector2(0, 0), new Vector2(1, 1), new Vector2(0, -80), new Vector2(-160, -300));
+    }
+
+    void OpenRanking()
+    {
+        for (int i = rankingList.childCount - 1; i >= 0; i--) Destroy(rankingList.GetChild(i).gameObject);
+        var list = ChuwiProgreso.Destacados();
+        rankingEmpty.gameObject.SetActive(list.Count == 0);
+        for (int i = 0; i < list.Count; i++) AddRankingRow(i + 1, list[i]);
+        ranking.alpha = 1; ranking.blocksRaycasts = true; ranking.interactable = true;
+        StartCoroutine(PopIn((RectTransform)ranking.transform.GetChild(1)));
+    }
+
+    void CloseRanking() { ranking.alpha = 0; ranking.blocksRaycasts = false; ranking.interactable = false; }
+
+    void AddRankingRow(int pos, ChuwiProgreso.Alumno a)
+    {
+        bool me = ChuwiProgreso.Actual != null && ChuwiProgreso.Actual.codigo == a.codigo;
+        var go = new GameObject("Fila " + a.codigo, typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup));
+        go.transform.SetParent(rankingList, false);
+        var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.color = me ? Cream : Bg; img.pixelsPerUnitMultiplier = 44f / 28f;
+        var h = go.GetComponent<HorizontalLayoutGroup>(); h.padding = new RectOffset(24, 28, 20, 20); h.spacing = 22;
+        h.childAlignment = TextAnchor.MiddleLeft; h.childControlWidth = true; h.childControlHeight = true; h.childForceExpandWidth = false; h.childForceExpandHeight = false;
+
+        var num = Img((RectTransform)go.transform, sCircle, pos == 1 ? Orange : Navy);
+        var nle = num.gameObject.AddComponent<LayoutElement>(); nle.preferredWidth = 76; nle.preferredHeight = 76; nle.minWidth = 76;
+        var nt = Txt(num.rectTransform, pos.ToString(), fBlack, 34, White, TextAnchor.MiddleCenter); Stretch(nt.rectTransform);
+
+        var col = new GameObject("Textos", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+        col.transform.SetParent(go.transform, false);
+        col.GetComponent<LayoutElement>().flexibleWidth = 1;
+        var v = col.GetComponent<VerticalLayoutGroup>(); v.spacing = 2; v.childControlWidth = true; v.childControlHeight = true; v.childForceExpandHeight = false;
+        Txt((RectTransform)col.transform, a.nombre, fBold, 32, Navy, TextAnchor.UpperLeft);
+        Txt((RectTransform)col.transform, "Código " + a.codigo + " · " + a.paises.Count + (a.paises.Count == 1 ? " país" : " países"), fRegular, 25, Muted, TextAnchor.UpperLeft);
+
+        var stars = new GameObject("Estrellas", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+        stars.transform.SetParent(go.transform, false);
+        var sh = stars.GetComponent<HorizontalLayoutGroup>(); sh.spacing = 6; sh.childAlignment = TextAnchor.MiddleRight;
+        sh.childControlWidth = true; sh.childControlHeight = true; sh.childForceExpandWidth = false; sh.childForceExpandHeight = false;
+        for (int i = 0; i < ChuwiProgreso.MaxEstrellas; i++)
+        {
+            var si = Img((RectTransform)stars.transform, iStar, i < a.Estrellas() ? Orange : Line);
+            var le = si.gameObject.AddComponent<LayoutElement>(); le.preferredWidth = 44; le.preferredHeight = 44;
+        }
     }
 
     // ---------------- Bienvenida ----------------
@@ -389,6 +617,8 @@ public sealed class ChuwiUI : MonoBehaviour
         Anchor(go, new Vector2(.5f, 1), new Vector2(.5f, 1), new Vector2(0, -580), new Vector2(720, 140));
         var hint = Txt(welcomeText, "Necesitarás el marcador de Chuwi o el mapa impreso.", fRegular, 28, new Color(1, 1, 1, .6f), TextAnchor.UpperCenter);
         Anchor(hint.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -740), new Vector2(-80, 60));
+        var rk = OutlineButton(welcomeText, "Exploradores destacados", White, OpenRanking);
+        Anchor(rk, new Vector2(.5f, 1), new Vector2(.5f, 1), new Vector2(0, -830), new Vector2(620, 100));
     }
 
     void Deco(RectTransform parent, Vector2 anchor, float size, Color c, float a)
@@ -450,10 +680,25 @@ public sealed class ChuwiUI : MonoBehaviour
         Anchor(bt.rectTransform, new Vector2(0, 0), new Vector2(1, 1), new Vector2(70, 0), new Vector2(-140, 0));
         bt.rectTransform.offsetMin = new Vector2(130, 0); bt.rectTransform.offsetMax = new Vector2(-10, 0);
 
+        starsRect = Rect("Estrellas", r); Anchor(starsRect, new Vector2(0, .5f), new Vector2(0, .5f), new Vector2(420, 0), new Vector2(330, 120));
+        starsRect.pivot = new Vector2(0, .5f);
+        Shadow(starsRect);
+        var sb = Img(starsRect, sRound, White); Stretch(sb.rectTransform); sb.pixelsPerUnitMultiplier = 44f / 60f;
+        for (int i = 0; i < starImgs.Length; i++)
+        {
+            starImgs[i] = Img(starsRect, iStar, Line);
+            Anchor(starImgs[i].rectTransform, new Vector2(0, .5f), new Vector2(0, .5f), new Vector2(57 + i * 54, 0), new Vector2(50, 50));
+        }
+        var rankBtn = RoundIconButton(r, iStar, Navy, OpenRanking);
+        Anchor((RectTransform)rankBtn.transform, new Vector2(1, .5f), new Vector2(1, .5f), new Vector2(-290, 0), new Vector2(120, 120));
+        ((RectTransform)rankBtn.transform).pivot = new Vector2(1, .5f);
+
         danceButton = RoundIconButton(r, iDance, Orange, Dance);
         Anchor((RectTransform)danceButton.transform, new Vector2(1, .5f), new Vector2(1, .5f), new Vector2(-150, 0), new Vector2(120, 120));
         var home = RoundIconButton(r, iClose, Navy, () =>
         {
+            StopDanceMusic(); StopAnthem(.3f);
+            ChuwiProgreso.CerrarSesion(); RefreshStars();
             state = State.Welcome; welcome.alpha = 1; welcome.blocksRaycasts = true; welcome.interactable = true;
         });
         Anchor((RectTransform)home.transform, new Vector2(1, .5f), new Vector2(1, .5f), new Vector2(-10, 0), new Vector2(120, 120));
