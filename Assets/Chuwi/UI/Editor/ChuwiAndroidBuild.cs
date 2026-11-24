@@ -47,19 +47,55 @@ public static class ChuwiAndroidBuild
         Debug.Log("[Chuwi] Android configurado: " + PackageId + ", IL2CPP, ARM64, minSdk " + (int)PlayerSettings.Android.minSdkVersion);
     }
 
-    static void SetIcon()
+    const string IconFrente = "Assets/Chuwi/UI/Icono/chuwi_icon_frente.png"; // capa delantera del ícono adaptativo
+    const string IconFondo = "Assets/Chuwi/UI/Icono/chuwi_icon_fondo.png";   // capa de fondo del ícono adaptativo
+
+    static Texture2D LoadIcon(string path)
     {
-        var imp = AssetImporter.GetAtPath(IconPath) as TextureImporter;
-        if (imp == null) { Debug.LogWarning("[Chuwi] No encontré el ícono en " + IconPath); return; }
-        if (imp.textureType != TextureImporterType.Default || imp.mipmapEnabled || imp.textureCompression != TextureImporterCompression.Uncompressed)
+        var imp = AssetImporter.GetAtPath(path) as TextureImporter;
+        if (imp == null) { Debug.LogWarning("[Chuwi] No encontré el ícono en " + path); return null; }
+        if (imp.textureType != TextureImporterType.Default || imp.mipmapEnabled || imp.textureCompression != TextureImporterCompression.Uncompressed
+            || !imp.alphaIsTransparency || imp.npotScale != TextureImporterNPOTScale.None)
         {
             imp.textureType = TextureImporterType.Default;
             imp.mipmapEnabled = false;
+            imp.alphaIsTransparency = true;
+            imp.npotScale = TextureImporterNPOTScale.None;
             imp.textureCompression = TextureImporterCompression.Uncompressed;
             imp.SaveAndReimport();
         }
-        var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(IconPath);
-        if (tex != null) PlayerSettings.SetIcons(NamedBuildTarget.Unknown, new[] { tex }, IconKind.Any);
+        return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+    }
+
+    static void SetIcon()
+    {
+        var tex = LoadIcon(IconPath);
+        if (tex == null) return;
+        PlayerSettings.SetIcons(NamedBuildTarget.Unknown, new[] { tex }, IconKind.Any);
+
+        // Android 8+ usa íconos adaptativos y redondos; si quedan vacíos, Unity pone su logo por defecto.
+        var frente = LoadIcon(IconFrente); var fondo = LoadIcon(IconFondo);
+        var android = NamedBuildTarget.Android;
+        foreach (var kind in PlayerSettings.GetSupportedIconKinds(android))
+        {
+            var icons = PlayerSettings.GetPlatformIcons(android, kind);
+            if (icons == null || icons.Length == 0) continue;
+            string k = kind.ToString().ToLowerInvariant();
+            foreach (var icon in icons)
+            {
+                if (k.Contains("adaptive"))
+                {
+                    if (frente == null || fondo == null) continue;
+                    // capa 0 = fondo, capa 1 = frente
+                    var layers = new Texture2D[icon.maxLayerCount];
+                    layers[0] = fondo; if (layers.Length > 1) layers[1] = frente;
+                    icon.SetTextures(layers);
+                }
+                else icon.SetTexture(tex); // Round y Legacy
+            }
+            PlayerSettings.SetPlatformIcons(android, kind, icons);
+            Debug.Log("[Chuwi] Ícono Android " + kind + ": " + icons.Length + " tamaños");
+        }
     }
 
     [MenuItem("Chuwi/Generar APK Android")]
