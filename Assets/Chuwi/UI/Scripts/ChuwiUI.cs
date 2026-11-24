@@ -38,6 +38,8 @@ public sealed class ChuwiUI : MonoBehaviour
     public List<AjusteHimno> ajustesHimnos = new List<AjusteHimno>();
     [Tooltip("Oculta los pines del mapa de países que no están en la información verificada (el modelo del mapa no se toca).")]
     public bool ocultarPinesSinInfo = true;
+    [Tooltip("Escanear el marcador una sola vez: el mapa se queda fijo en la mesa aunque la cámara deje de ver el marcador (seguimiento del dispositivo de Vuforia/ARCore).")]
+    public bool escanearUnaVez = true;
 
     // ---------- Paleta (estilo del Figma) ----------
     static readonly Color Red = Hex("C8102E"), RedDark = Hex("9E0C24"), Navy = Hex("1B2A4A"), Orange = Hex("F28C28"),
@@ -102,6 +104,7 @@ public sealed class ChuwiUI : MonoBehaviour
                 }
             travel.Departed += OnDeparted;
             travel.Arrived += OnArrived;
+            if (escanearUnaVez) StartCoroutine(EnableDeviceTracking());
         }
         state = showWelcome ? State.Welcome : State.Map;
         var es = EventSystem.current != null ? EventSystem.current : FindFirstObjectByType<EventSystem>();
@@ -413,6 +416,19 @@ public sealed class ChuwiUI : MonoBehaviour
         float v = anthem.volume;
         for (float x = 0; x < fade; x += Time.deltaTime) { anthem.volume = Mathf.Lerp(v, 0, x / fade); yield return null; }
         anthem.Stop(); anthem.volume = anthemVolume; anthemCo = null;
+    }
+
+    // Seguimiento del dispositivo: después de ver el marcador una vez, el mapa queda anclado al mundo (estado EXTENDED_TRACKED).
+    IEnumerator EnableDeviceTracking()
+    {
+        float t = 0;
+        while (Vuforia.VuforiaBehaviour.Instance == null && t < 5) { t += Time.unscaledDeltaTime; yield return null; }
+        var vb = Vuforia.VuforiaBehaviour.Instance;
+        if (vb == null) { Log("Sin VuforiaBehaviour: no se activa el seguimiento del dispositivo"); yield break; }
+        var dp = vb.GetComponent<Vuforia.DevicePoseBehaviour>();
+        if (dp == null) dp = vb.gameObject.AddComponent<Vuforia.DevicePoseBehaviour>();
+        dp.enabled = true;
+        Log("Seguimiento del dispositivo activado");
     }
 
     IEnumerator LockLandscape()
