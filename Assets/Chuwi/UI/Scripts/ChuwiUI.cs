@@ -36,6 +36,10 @@ public sealed class ChuwiUI : MonoBehaviour
     [Tooltip("Tope de segundos del coro si el archivo es más largo.")]
     public float anthemMaxSeconds = 30f;
     public List<AjusteHimno> ajustesHimnos = new List<AjusteHimno>();
+    [Tooltip("Oculta los pines del mapa de países que no están en la información verificada (el modelo del mapa no se toca).")]
+    public bool ocultarPinesSinInfo = true;
+    [Tooltip("Escanear el marcador una sola vez: el mapa se queda fijo en la mesa aunque la cámara deje de ver el marcador (seguimiento del dispositivo de Vuforia/ARCore).")]
+    public bool escanearUnaVez = true;
 
     // ---------- Paleta (estilo del Figma) ----------
     static readonly Color Red = Hex("C8102E"), RedDark = Hex("9E0C24"), Navy = Hex("1B2A4A"), Orange = Hex("F28C28"),
@@ -59,7 +63,7 @@ public sealed class ChuwiUI : MonoBehaviour
     readonly List<(Button b, Image img, Text txt, string key)> chips = new List<(Button, Image, Text, string)>();
     readonly List<(Button b, Image img, Text txt, int idx)> tabs = new List<(Button, Image, Text, int)>();
     string continentFilter = "";
-    int infoIndex = -1, infoTab = 0;
+    int infoIndex = -1, infoTab = 0; string infoCountry = "";
     bool seenMarker, landscape, layoutDirty = true;
     Vector2 lastScreen; Rect lastSafe;
     float bubbleTimer;
@@ -71,6 +75,11 @@ public sealed class ChuwiUI : MonoBehaviour
     CanvasGroup register, ranking; InputField inCode, inName; Text regError, rankingEmpty;
     RectTransform rankingList, starsRect; readonly Image[] starImgs = new Image[ChuwiProgreso.MaxEstrellas];
     bool registerOpen;
+    // Guía de programas (información verificada)
+    CanvasGroup guide; RectTransform guideTabRow, guideContent; ScrollRect guideScroll; int guideTab;
+    readonly List<(Button b, Image img, Text txt, int idx)> guideTabs = new List<(Button, Image, Text, int)>();
+    static readonly Color NavyDeep = Hex("0B1530");
+    Sprite sPortada;
 
     // ======================================================================
     void Awake()
@@ -87,8 +96,15 @@ public sealed class ChuwiUI : MonoBehaviour
             if (fit == null) fit = gameObject.AddComponent<ChuwiARFit>();
             fit.Setup(travel);
             travel.showDebugMenu = false;
+            if (ocultarPinesSinInfo && travel.destinations != null)
+                for (int i = 1; i < travel.destinations.Length; i++)
+                {
+                    var d = travel.destinations[i];
+                    if (d != null && d.anchor != null && ChuwiDestinos.Get(d.country) == null) d.anchor.gameObject.SetActive(false);
+                }
             travel.Departed += OnDeparted;
             travel.Arrived += OnArrived;
+            if (escanearUnaVez) StartCoroutine(EnableDeviceTracking());
         }
         state = showWelcome ? State.Welcome : State.Map;
         var es = EventSystem.current != null ? EventSystem.current : FindFirstObjectByType<EventSystem>();
@@ -168,7 +184,7 @@ public sealed class ChuwiUI : MonoBehaviour
     // Si el EventSystem no entrega el clic, detectamos el toque sobre el boton de inicio directamente.
     void WelcomeFallback()
     {
-        if (state != State.Welcome || startButton == null || registerOpen) return;
+        if (state != State.Welcome || startButton == null || registerOpen || (guide != null && guide.blocksRaycasts) || (sim != null && sim.blocksRaycasts) || (ranking != null && ranking.blocksRaycasts)) return;
         Vector2 p; bool pressed = false;
 #if ENABLE_INPUT_SYSTEM
         if (UnityEngine.InputSystem.Touchscreen.current != null && UnityEngine.InputSystem.Touchscreen.current.primaryTouch.press.wasReleasedThisFrame)
@@ -268,6 +284,7 @@ public sealed class ChuwiUI : MonoBehaviour
     void SelectCountry(int index)
     {
         if (travel == null) return;
+        if (index == 0 && travel.Selected <= 0 && !travel.IsMoving) { OpenGuide("Programas"); return; } // Chuwi ya está en ESAN: abre la guía
         if (index == travel.Selected && !travel.IsMoving && index > 0) { OpenInfo(index); return; }
         travel.SelectDestination(index);
         if (!travel.IsMoving) ShowToastBubble("Enfoca el marcador para viajar");
@@ -275,19 +292,31 @@ public sealed class ChuwiUI : MonoBehaviour
 
     void OpenInfo(int index)
     {
-        infoIndex = index; infoTab = 0;
         var dest = travel.destinations[index];
-        var info = ChuwiDestinos.Get(dest.country);
-        infoTitle.text = dest.country;
-        infoContinent.text = dest.continent.ToUpperInvariant();
-        infoContinentChip.color = ChuwiDestinos.ContinentColor(dest.continent);
-        infoBadge.color = ChuwiDestinos.ContinentColor(dest.continent);
-        infoBadgeText.text = ChuwiDestinos.Code(dest.country);
-        infoIntroText = info != null ? info.intro : "Información pendiente de la Oficina Internacional.";
+        ShowInfo(index, dest.country, dest.continent);
+    }
+
+    // Destinos sin pin en el mapa (Europa): se abre la ficha directamente, sin viaje.
+    void OpenSinPin(ChuwiDestinos.SinPin p)
+    {
+        SetBubble("Este destino no tiene pin en el mapa: aquí está su información.", 4f);
+        ShowInfo(-1, p.country, p.continent);
+    }
+
+    void ShowInfo(int index, string country, string continent)
+    {
+        infoIndex = index; infoTab = 0; infoCountry = country;
+        var info = ChuwiDestinos.Get(country);
+        infoTitle.text = country;
+        infoContinent.text = continent.ToUpperInvariant();
+        infoContinentChip.color = ChuwiDestinos.ContinentColor(continent);
+        infoBadge.color = ChuwiDestinos.ContinentColor(continent);
+        infoBadgeText.text = ChuwiDestinos.Code(country);
+        infoIntroText = info != null ? info.intro : "Consulta este destino con la Oficina Internacional (" + ChuwiDestinos.Contacto + ").";
         BuildTabs(info);
         FillInfo(info);
         state = State.Info; ShowPanel(State.Info, false);
-        if (index > 0 && ChuwiProgreso.Visitar(ChuwiDestinos.Code(dest.country)))
+        if (index != 0 && ChuwiProgreso.Visitar(ChuwiDestinos.Code(country)))
         {
             int n = ChuwiProgreso.Actual.Estrellas();
             RefreshStars(); StartCoroutine(PopIn(starsRect));
@@ -389,6 +418,19 @@ public sealed class ChuwiUI : MonoBehaviour
         anthem.Stop(); anthem.volume = anthemVolume; anthemCo = null;
     }
 
+    // Seguimiento del dispositivo: después de ver el marcador una vez, el mapa queda anclado al mundo (estado EXTENDED_TRACKED).
+    IEnumerator EnableDeviceTracking()
+    {
+        float t = 0;
+        while (Vuforia.VuforiaBehaviour.Instance == null && t < 5) { t += Time.unscaledDeltaTime; yield return null; }
+        var vb = Vuforia.VuforiaBehaviour.Instance;
+        if (vb == null) { Log("Sin VuforiaBehaviour: no se activa el seguimiento del dispositivo"); yield break; }
+        var dp = vb.GetComponent<Vuforia.DevicePoseBehaviour>();
+        if (dp == null) dp = vb.gameObject.AddComponent<Vuforia.DevicePoseBehaviour>();
+        dp.enabled = true;
+        Log("Seguimiento del dispositivo activado");
+    }
+
     IEnumerator LockLandscape()
     {
         Screen.autorotateToPortrait = false; Screen.autorotateToPortraitUpsideDown = false;
@@ -407,6 +449,7 @@ public sealed class ChuwiUI : MonoBehaviour
         sRound = LoadSprite("ui_round", 44); sOutline = LoadSprite("ui_round_outline", 44); sCircle = LoadSprite("ui_circle", 0);
         sShadow = LoadSprite("ui_shadow", 76); sCorner = LoadSprite("ui_corner", 0); sGradient = LoadSprite("ui_gradient", 0);
         sGlow = LoadSprite("ui_glow", 0); sChuwiHola = LoadSprite("chuwi_hola", 0); sChuwiSenala = LoadSprite("chuwi_senala", 0);
+        sPortada = LoadSprite("chuwi_portada", 0);
         iBack = LoadSprite("icon_back", 0); iDance = LoadSprite("icon_dance", 0); iPin = LoadSprite("icon_pin", 0);
         iMail = LoadSprite("icon_mail", 0); iCamera = LoadSprite("icon_camera", 0); iPlane = LoadSprite("icon_plane", 0);
         iClose = LoadSprite("icon_close", 0); iStar = LoadSprite("icon_star", 0);
@@ -462,6 +505,8 @@ public sealed class ChuwiUI : MonoBehaviour
         BuildWelcome(root.transform); // encima de todo (fuera del safe area para cubrir la pantalla)
         BuildRegister(root.transform);
         BuildRanking(root.transform);
+        BuildGuide(root.transform);
+        BuildSimulator(root.transform);
         RefreshStars();
     }
 
@@ -582,17 +627,39 @@ public sealed class ChuwiUI : MonoBehaviour
     {
         var r = Rect("Bienvenida", parent); Stretch(r);
         welcome = r.gameObject.AddComponent<CanvasGroup>();
-        var bg = Img(r, sGradient, White); Stretch(bg.rectTransform); bg.raycastTarget = true;
-        // decoraciones
-        Deco(r, new Vector2(.95f, .92f), 520, Red, .9f);
-        Deco(r, new Vector2(.02f, .55f), 300, Orange, .85f);
-        Deco(r, new Vector2(.9f, .25f), 160, Hex("2E4372"), 1);
+        // Estilo de la web de simulación: azul marino oscuro con círculos decorativos
+        var bg = Img(r, null, NavyDeep); Stretch(bg.rectTransform); bg.raycastTarget = true;
+        var shade = Img(r, sGlow, new Color(.18f, .27f, .52f, .55f)); Anchor(shade.rectTransform, new Vector2(.3f, .5f), new Vector2(.3f, .5f), Vector2.zero, new Vector2(1500, 1500));
+        Deco(r, new Vector2(.97f, .95f), 560, Red, .9f);
+        Deco(r, new Vector2(.03f, .08f), 380, Orange, .7f);
+        Deco(r, new Vector2(.88f, .12f), 200, Hex("3B5BA9"), 1);
+        Deco(r, new Vector2(.06f, .9f), 140, Hex("3B5BA9"), 1);
+        Deco(r, new Vector2(.55f, .93f), 60, White, .5f);
+        Deco(r, new Vector2(.47f, .1f), 40, White, .5f);
 
         welcomeArt = Rect("Arte", r);
-        var glow = Img(welcomeArt, sGlow, new Color(1, .8f, .55f, .55f)); Center(glow.rectTransform, new Vector2(0, 0), new Vector2(900, 900));
+        var glow = Img(welcomeArt, sGlow, new Color(1, .55f, .35f, .35f)); Center(glow.rectTransform, new Vector2(0, 0), new Vector2(1100, 1100));
         welcomeChuwi = Rect("ChuwiFlota", welcomeArt); Center(welcomeChuwi, Vector2.zero, new Vector2(10, 10));
-        var chuwi = Img(welcomeChuwi, sChuwiHola, White); chuwi.preserveAspect = true;
-        Center(chuwi.rectTransform, Vector2.zero, new Vector2(620, 900));
+        if (sPortada != null)
+        {
+            // Imagen de portada (Chuwi con maleta frente a ESAN) en una tarjeta redondeada
+            var frame = Rect("Portada", welcomeChuwi); Center(frame, Vector2.zero, new Vector2(780, 780));
+            frame.localRotation = Quaternion.Euler(0, 0, 2.5f);
+            Shadow(frame);
+            var border = Img(frame, sRound, White); Stretch(border.rectTransform); border.pixelsPerUnitMultiplier = 44f / 70f;
+            var maskImg = Img(frame, sRound, White); Stretch(maskImg.rectTransform); maskImg.pixelsPerUnitMultiplier = 44f / 58f;
+            maskImg.rectTransform.offsetMin = new Vector2(14, 14); maskImg.rectTransform.offsetMax = new Vector2(-14, -14);
+            maskImg.gameObject.AddComponent<Mask>().showMaskGraphic = true;
+            var pic = Img(maskImg.rectTransform, sPortada, White); Stretch(pic.rectTransform); pic.preserveAspect = false;
+            var badge = Pill(frame, "¡Listo para viajar!", fBold, 30, Red, White, 70);
+            Anchor(badge, new Vector2(0, 0), new Vector2(0, 0), new Vector2(150, 40), new Vector2(340, 70));
+            badge.localRotation = Quaternion.Euler(0, 0, -4f);
+        }
+        else
+        {
+            var chuwi = Img(welcomeChuwi, sChuwiHola, White); chuwi.preserveAspect = true;
+            Center(chuwi.rectTransform, Vector2.zero, new Vector2(620, 900));
+        }
 
         welcomeText = Rect("Textos", r);
         var tag = Pill(welcomeText, "UNIVERSIDAD ESAN · OFICINA INTERNACIONAL", fSemi, 24, new Color(1, 1, 1, .14f), White, 60);
@@ -608,8 +675,12 @@ public sealed class ChuwiUI : MonoBehaviour
         h.childControlWidth = true; h.childControlHeight = true; h.childForceExpandWidth = false;
         foreach (var s in new[] { "Intercambio", "Doble grado", "Becas", "Cursos cortos" })
         {
+            string tab = s;
             var p = Pill(opp, s, fSemi, 26, new Color(1, 1, 1, .12f), White, 64);
             var le = p.gameObject.AddComponent<LayoutElement>(); le.preferredHeight = 64; le.preferredWidth = 42 + s.Length * 16;
+            var pi = p.GetComponent<Image>(); pi.raycastTarget = true;
+            var pb = p.gameObject.AddComponent<Button>(); pb.transition = Selectable.Transition.None; p.gameObject.AddComponent<ChuwiPress>();
+            pb.onClick.AddListener(() => OpenGuide(tab));
         }
 
         var go = BigButton(welcomeText, "Explorar con Chuwi", Red, White, iPlane, StartApp);
@@ -617,8 +688,10 @@ public sealed class ChuwiUI : MonoBehaviour
         Anchor(go, new Vector2(.5f, 1), new Vector2(.5f, 1), new Vector2(0, -580), new Vector2(720, 140));
         var hint = Txt(welcomeText, "Necesitarás el marcador de Chuwi o el mapa impreso.", fRegular, 28, new Color(1, 1, 1, .6f), TextAnchor.UpperCenter);
         Anchor(hint.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -740), new Vector2(-80, 60));
-        var rk = OutlineButton(welcomeText, "Exploradores destacados", White, OpenRanking);
-        Anchor(rk, new Vector2(.5f, 1), new Vector2(.5f, 1), new Vector2(0, -830), new Vector2(620, 100));
+        var simB = OutlineButton(welcomeText, "¿Ya puedes postular?", White, OpenSimulator, 30);
+        Anchor(simB, new Vector2(.5f, 1), new Vector2(.5f, 1), new Vector2(-222, -830), new Vector2(424, 100));
+        var rk = OutlineButton(welcomeText, "Exploradores destacados", White, OpenRanking, 30);
+        Anchor(rk, new Vector2(.5f, 1), new Vector2(.5f, 1), new Vector2(222, -830), new Vector2(424, 100));
     }
 
     void Deco(RectTransform parent, Vector2 anchor, float size, Color c, float a)
@@ -734,9 +807,14 @@ public sealed class ChuwiUI : MonoBehaviour
         // ---- Panel mapa ----
         mapPanel = Rect("PanelMapa", sheetRect); Stretch(mapPanel);
         var t = Txt(mapPanel, "Elige tu destino", fBold, 46, Navy, TextAnchor.MiddleLeft);
-        Anchor(t.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -90), new Vector2(-100, 70));
+        Anchor(t.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(-130, -90), new Vector2(-360, 70));
         var t2 = Txt(mapPanel, "Toca un país o un pin del mapa y Chuwi te lleva.", fRegular, 28, Muted, TextAnchor.MiddleLeft);
         Anchor(t2.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -145), new Vector2(-100, 44));
+        var gb = Pill(mapPanel, "Guía", fBold, 30, Red, White, 76);
+        Anchor(gb, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-40, -52), new Vector2(190, 76)); gb.pivot = new Vector2(1, 1);
+        gb.GetComponent<Image>().raycastTarget = true;
+        var gbb = gb.gameObject.AddComponent<Button>(); gbb.transition = Selectable.Transition.None; gb.gameObject.AddComponent<ChuwiPress>();
+        gbb.onClick.AddListener(() => OpenGuide("Programas"));
 
         var chipScroll = ScrollH(mapPanel, out chipRow, 10);
         Anchor((RectTransform)chipScroll.transform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -225), new Vector2(0, 86));
@@ -744,8 +822,14 @@ public sealed class ChuwiUI : MonoBehaviour
         if (travel != null)
         {
             var seen = new List<string>();
-            foreach (var d in travel.destinations)
+            for (int i = 1; i < travel.destinations.Length; i++)
+            {
+                var d = travel.destinations[i];
+                if (ChuwiDestinos.Get(d.country) == null) continue; // solo países con información verificada
                 if (!string.IsNullOrEmpty(d.continent) && !seen.Contains(d.continent)) { seen.Add(d.continent); AddChip(d.continent, d.continent); }
+            }
+            foreach (var p in ChuwiDestinos.SinPines)
+                if (!seen.Contains(p.continent)) { seen.Add(p.continent); AddChip(p.continent, p.continent); }
         }
 
         cardScroll = ScrollH(mapPanel, out cardRow, 24);
@@ -805,7 +889,7 @@ public sealed class ChuwiUI : MonoBehaviour
 
     void AskInfo()
     {
-        string c = infoIndex >= 0 ? travel.destinations[infoIndex].country : "";
+        string c = infoCountry;
         string subject = Uri.EscapeDataString("Chuwi AR - Información sobre " + c);
         Application.OpenURL("mailto:" + ChuwiDestinos.Contacto + "?subject=" + subject);
     }
@@ -844,33 +928,317 @@ public sealed class ChuwiUI : MonoBehaviour
         {
             var d = travel.destinations[i];
             if (!string.IsNullOrEmpty(continentFilter) && d.continent != continentFilter && i != 0) continue;
-            int idx = i;
             var info = ChuwiDestinos.Get(d.country);
-            var col = ChuwiDestinos.ContinentColor(d.continent);
-
-            var go = new GameObject("Tarjeta " + d.country, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
-            go.transform.SetParent(cardRow, false);
-            var le = go.GetComponent<LayoutElement>(); le.preferredWidth = 280; le.preferredHeight = 340; le.minHeight = 300;
-            var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.color = idx == 0 ? Cream : Bg;
-            img.pixelsPerUnitMultiplier = 44f / 34f;
-            var rt = (RectTransform)go.transform;
-            var strip = Img(rt, sRound, col); strip.pixelsPerUnitMultiplier = 44f / 6f;
-            Anchor(strip.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -14), new Vector2(-60, 12));
-            var badge = Img(rt, sCircle, col); Anchor(badge.rectTransform, new Vector2(0, 1), new Vector2(0, 1), new Vector2(30, -48), new Vector2(96, 96));
-            badge.rectTransform.pivot = new Vector2(0, 1);
-            var bt = Txt(badge.rectTransform, ChuwiDestinos.Code(d.country), fBlack, 34, White, TextAnchor.MiddleCenter); Stretch(bt.rectTransform);
-            var name = Txt(rt, idx == 0 ? "ESAN Lima" : d.country, fBold, 34, Navy, TextAnchor.UpperLeft);
-            Anchor(name.rectTransform, new Vector2(0, 0), new Vector2(1, 1), Vector2.zero, Vector2.zero);
-            name.rectTransform.offsetMin = new Vector2(30, 60); name.rectTransform.offsetMax = new Vector2(-20, -160);
-            string sub = idx == 0 ? "Punto de partida" : info != null ? info.UniversityCount + (info.UniversityCount == 1 ? " universidad" : " universidades") : d.continent;
-            var s = Txt(rt, sub, fRegular, 25, Muted, TextAnchor.LowerLeft);
-            Anchor(s.rectTransform, new Vector2(0, 0), new Vector2(1, 0), new Vector2(0, 26), new Vector2(0, 40));
-            s.rectTransform.pivot = new Vector2(.5f, 0); s.rectTransform.offsetMin = new Vector2(30, 26); s.rectTransform.offsetMax = new Vector2(-20, 66);
-            var b = go.GetComponent<Button>(); b.transition = Selectable.Transition.None;
-            go.AddComponent<ChuwiPress>();
-            b.onClick.AddListener(() => SelectCountry(idx));
+            if (info == null) continue; // sin información verificada: no se muestra
+            int idx = i;
+            AddCard(idx == 0 ? "ESAN Lima" : d.country, ChuwiDestinos.Code(d.country), ChuwiDestinos.ContinentColor(d.continent),
+                idx == 0 ? "Guía de programas" : info.resumen, idx == 0 ? Cream : Bg, () => SelectCountry(idx));
+            if (idx == 0) AddCard("¿Puedo postular?", "?", Orange, "Simulador de requisitos", Cream, OpenSimulator);
+        }
+        foreach (var p in ChuwiDestinos.SinPines)
+        {
+            if (!string.IsNullOrEmpty(continentFilter) && p.continent != continentFilter) continue;
+            var pin = p;
+            var info = ChuwiDestinos.Get(p.country);
+            if (info == null) continue;
+            AddCard(p.country, info.code, ChuwiDestinos.ContinentColor(p.continent), info.resumen, Bg, () => OpenSinPin(pin));
         }
         cardScroll.horizontalNormalizedPosition = 0;
+    }
+
+    void AddCard(string title, string code, Color col, string sub, Color bgCol, Action onClick)
+    {
+        var go = new GameObject("Tarjeta " + title, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+        go.transform.SetParent(cardRow, false);
+        var le = go.GetComponent<LayoutElement>(); le.preferredWidth = 300; le.preferredHeight = 340; le.minHeight = 300;
+        var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.color = bgCol;
+        img.pixelsPerUnitMultiplier = 44f / 34f;
+        var rt = (RectTransform)go.transform;
+        var strip = Img(rt, sRound, col); strip.pixelsPerUnitMultiplier = 44f / 6f;
+        Anchor(strip.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -14), new Vector2(-60, 12));
+        var badge = Img(rt, sCircle, col); Anchor(badge.rectTransform, new Vector2(0, 1), new Vector2(0, 1), new Vector2(30, -48), new Vector2(96, 96));
+        badge.rectTransform.pivot = new Vector2(0, 1);
+        var bt = Txt(badge.rectTransform, code, fBlack, code.Length > 2 ? 24 : 34, White, TextAnchor.MiddleCenter); Stretch(bt.rectTransform);
+        var name = Txt(rt, title, fBold, 32, Navy, TextAnchor.UpperLeft);
+        Anchor(name.rectTransform, new Vector2(0, 0), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        name.rectTransform.offsetMin = new Vector2(30, 90); name.rectTransform.offsetMax = new Vector2(-20, -160);
+        var s = Txt(rt, sub, fRegular, 23, Muted, TextAnchor.LowerLeft);
+        Anchor(s.rectTransform, new Vector2(0, 0), new Vector2(1, 0), Vector2.zero, Vector2.zero);
+        s.rectTransform.pivot = new Vector2(.5f, 0); s.rectTransform.offsetMin = new Vector2(30, 24); s.rectTransform.offsetMax = new Vector2(-20, 90);
+        var b = go.GetComponent<Button>(); b.transition = Selectable.Transition.None;
+        go.AddComponent<ChuwiPress>();
+        b.onClick.AddListener(() => onClick());
+    }
+
+    // ---------------- Guía de programas (información verificada) ----------------
+    void BuildGuide(Transform parent)
+    {
+        var r = Rect("Guia", parent); Stretch(r);
+        guide = r.gameObject.AddComponent<CanvasGroup>(); guide.alpha = 0; guide.blocksRaycasts = false; guide.interactable = false;
+        var dim = Img(r, null, new Color(.03f, .06f, .14f, .7f)); Stretch(dim.rectTransform); dim.raycastTarget = true;
+        var db = dim.gameObject.AddComponent<Button>(); db.transition = Selectable.Transition.None; db.onClick.AddListener(CloseGuide);
+
+        var card = Rect("Tarjeta", r); Stretch(card); card.offsetMin = new Vector2(70, 50); card.offsetMax = new Vector2(-70, -50);
+        Shadow(card);
+        var bg = Img(card, sRound, White); Stretch(bg.rectTransform); bg.raycastTarget = true;
+        // Cabecera azul marino con círculos, como la web de simulación
+        var head = Img(card, sRound, NavyDeep); head.pixelsPerUnitMultiplier = 1f;
+        Anchor(head.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -110), new Vector2(0, 220));
+        var hm = head.gameObject.AddComponent<Mask>(); hm.showMaskGraphic = true;
+        Deco(head.rectTransform, new Vector2(.96f, .9f), 300, Red, .9f);
+        Deco(head.rectTransform, new Vector2(.7f, 0), 160, Orange, .8f);
+        var tag = Txt(head.rectTransform, "UNIVERSIDAD ESAN · OFICINA INTERNACIONAL", fSemi, 22, new Color(1, 1, 1, .7f), TextAnchor.UpperLeft);
+        Anchor(tag.rectTransform, new Vector2(0, 1), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        tag.rectTransform.offsetMin = new Vector2(50, -78); tag.rectTransform.offsetMax = new Vector2(-360, -40);
+        var t = Txt(head.rectTransform, "Guía de programas", fBlack, 52, White, TextAnchor.UpperLeft);
+        Anchor(t.rectTransform, new Vector2(0, 1), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        t.rectTransform.offsetMin = new Vector2(50, -150); t.rectTransform.offsetMax = new Vector2(-360, -80);
+        var st = Txt(head.rectTransform, "Información verificada para el pregrado", fRegular, 26, new Color(1, 1, 1, .8f), TextAnchor.UpperLeft);
+        Anchor(st.rectTransform, new Vector2(0, 1), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        st.rectTransform.offsetMin = new Vector2(50, -200); st.rectTransform.offsetMax = new Vector2(-360, -155);
+        var face = Img(head.rectTransform, sChuwiHola, White); face.preserveAspect = true;
+        Anchor(face.rectTransform, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-170, -10), new Vector2(150, 210));
+        face.rectTransform.pivot = new Vector2(1, 0);
+        var close = RoundIconButton(head.rectTransform, iClose, new Color(1, 1, 1, .18f), CloseGuide);
+        Anchor((RectTransform)close.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-40, -40), new Vector2(100, 100));
+        ((RectTransform)close.transform).pivot = new Vector2(1, 1);
+
+        var tabScroll = ScrollH(card, out guideTabRow, 10);
+        Anchor((RectTransform)tabScroll.transform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -275), new Vector2(0, 84));
+        var info = ChuwiDestinos.Guia;
+        for (int i = 0; i < info.sections.Count; i++)
+        {
+            int idx = i; string label = info.sections[i].name;
+            var go = new GameObject("Tab " + label, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            go.transform.SetParent(guideTabRow, false);
+            var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 44f / 38f;
+            var le = go.GetComponent<LayoutElement>(); le.preferredHeight = 76; le.preferredWidth = 70 + label.Length * 19;
+            var txt = Txt((RectTransform)go.transform, label, fSemi, 29, Navy, TextAnchor.MiddleCenter); Stretch(txt.rectTransform);
+            var b = go.GetComponent<Button>(); b.transition = Selectable.Transition.None; go.AddComponent<ChuwiPress>();
+            b.onClick.AddListener(() => { guideTab = idx; FillGuide(); });
+            guideTabs.Add((b, img, txt, idx));
+        }
+
+        guideScroll = ScrollV(card, out guideContent);
+        var gsr = (RectTransform)guideScroll.transform;
+        gsr.anchorMin = Vector2.zero; gsr.anchorMax = Vector2.one; gsr.offsetMin = new Vector2(50, 40); gsr.offsetMax = new Vector2(-50, -330);
+    }
+
+    void OpenGuide(string section)
+    {
+        guideTab = ChuwiDestinos.Guia.IndexOf(section);
+        FillGuide();
+        guide.alpha = 1; guide.blocksRaycasts = true; guide.interactable = true;
+        StartCoroutine(PopIn((RectTransform)guide.transform.GetChild(1)));
+        var sr = guideTabRow.GetComponentInParent<ScrollRect>();
+        if (sr != null) sr.horizontalNormalizedPosition = guideTabs.Count > 1 ? Mathf.Clamp01((float)guideTab / (guideTabs.Count - 1)) : 0;
+    }
+
+    void CloseGuide() { guide.alpha = 0; guide.blocksRaycasts = false; guide.interactable = false; }
+
+    void FillGuide()
+    {
+        foreach (var t in guideTabs)
+        {
+            bool on = t.idx == guideTab;
+            t.img.color = on ? Red : Bg; t.txt.color = on ? White : Navy;
+        }
+        var info = ChuwiDestinos.Guia;
+        FillSection(guideContent, guideTab == 0 ? info.intro : "", info.sections[Mathf.Clamp(guideTab, 0, info.sections.Count - 1)]);
+        guideScroll.verticalNormalizedPosition = 1;
+    }
+
+    // ---------------- Simulador "¿Ya puedes postular?" ----------------
+    // Reglas tomadas solo del documento verificado (ChuwiDestinos). Es una simulación referencial.
+    CanvasGroup sim; RectTransform simResults; ScrollRect simScroll;
+    int simCiclo = 1, simCred = 0, simProm = 1, simPend = 0, simIngles = 0;
+    readonly List<Action> simPaint = new List<Action>();
+    static readonly string[] CredLabels = { "0–41", "42–83", "84–104", "105–119", "120 o más" };
+    static readonly int[] CredMin = { 0, 42, 84, 105, 120 };
+    static readonly Color Green = Hex("2E9E4F");
+
+    void BuildSimulator(Transform parent)
+    {
+        var r = Rect("Simulador", parent); Stretch(r);
+        sim = r.gameObject.AddComponent<CanvasGroup>(); sim.alpha = 0; sim.blocksRaycasts = false; sim.interactable = false;
+        var dim = Img(r, null, new Color(.03f, .06f, .14f, .7f)); Stretch(dim.rectTransform); dim.raycastTarget = true;
+        var db = dim.gameObject.AddComponent<Button>(); db.transition = Selectable.Transition.None; db.onClick.AddListener(CloseSimulator);
+
+        var card = Rect("Tarjeta", r); Stretch(card); card.offsetMin = new Vector2(70, 50); card.offsetMax = new Vector2(-70, -50);
+        Shadow(card);
+        var bg = Img(card, sRound, White); Stretch(bg.rectTransform); bg.raycastTarget = true;
+        var head = Img(card, sRound, NavyDeep); head.pixelsPerUnitMultiplier = 1f;
+        Anchor(head.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -90), new Vector2(0, 180));
+        head.gameObject.AddComponent<Mask>().showMaskGraphic = true;
+        Deco(head.rectTransform, new Vector2(.96f, .9f), 260, Red, .9f);
+        Deco(head.rectTransform, new Vector2(.72f, 0), 140, Orange, .8f);
+        var tag = Txt(head.rectTransform, "SIMULACIÓN · OFICINA INTERNACIONAL", fSemi, 22, new Color(1, 1, 1, .7f), TextAnchor.UpperLeft);
+        Anchor(tag.rectTransform, new Vector2(0, 1), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        tag.rectTransform.offsetMin = new Vector2(50, -70); tag.rectTransform.offsetMax = new Vector2(-360, -34);
+        var t = Txt(head.rectTransform, "¿Ya puedes postular?", fBlack, 52, White, TextAnchor.UpperLeft);
+        Anchor(t.rectTransform, new Vector2(0, 1), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        t.rectTransform.offsetMin = new Vector2(50, -140); t.rectTransform.offsetMax = new Vector2(-360, -72);
+        var face = Img(head.rectTransform, sChuwiHola, White); face.preserveAspect = true;
+        Anchor(face.rectTransform, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-170, -10), new Vector2(130, 180));
+        face.rectTransform.pivot = new Vector2(1, 0);
+        var close = RoundIconButton(head.rectTransform, iClose, new Color(1, 1, 1, .18f), CloseSimulator);
+        Anchor((RectTransform)close.transform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-40, -40), new Vector2(100, 100));
+        ((RectTransform)close.transform).pivot = new Vector2(1, 1);
+
+        // Columna izquierda: preguntas
+        var left = Rect("Preguntas", card);
+        left.anchorMin = new Vector2(0, 0); left.anchorMax = new Vector2(.5f, 1); left.offsetMin = new Vector2(50, 40); left.offsetMax = new Vector2(-20, -200);
+        var v = left.gameObject.AddComponent<VerticalLayoutGroup>(); v.spacing = 10; v.childControlWidth = true; v.childControlHeight = true;
+        v.childForceExpandHeight = false; v.childForceExpandWidth = true;
+
+        var ciclos = new string[10]; for (int i = 0; i < 10; i++) ciclos[i] = (i + 1).ToString();
+        Question(left, "¿En qué ciclo estás?", ciclos, 56, () => simCiclo - 1, i =>
+        {
+            simCiclo = i + 1;
+            int est = (simCiclo - 1) * 21; // estimado: unos 21 créditos por ciclo aprobado
+            simCred = 0; for (int k = 0; k < CredMin.Length; k++) if (est >= CredMin[k]) simCred = k;
+        });
+        Question(left, "Créditos aprobados (aprox.)", CredLabels, 0, () => simCred, i => simCred = i);
+        Question(left, "Tu promedio ponderado", new[] { "Menos de 13", "13 o más", "Tercio superior" }, 0, () => simProm, i => simProm = i);
+        Question(left, "¿Tienes cursos pendientes o desaprobados?", new[] { "No", "Sí" }, 120, () => simPend, i => simPend = i);
+        Question(left, "¿Tienes certificado de inglés?", new[] { "Aún no", "Nivel B2", "TOEFL / IELTS" }, 0, () => simIngles, i => simIngles = i);
+
+        var demo = OutlineButton(left, "¿Y si estuviera en 6.º ciclo?", Red, () =>
+        {
+            simCiclo = 6; simCred = 3; simProm = 1; simPend = 0; simIngles = 2; RefreshSimulator();
+            SetBubble("¡Mira cómo cambia todo en 6.º ciclo!", 3.5f);
+        }, 30);
+        var dle = demo.gameObject.AddComponent<LayoutElement>(); dle.preferredHeight = 90; dle.minHeight = 90;
+
+        // Columna derecha: resultados
+        simScroll = ScrollV(card, out simResults);
+        var sr = (RectTransform)simScroll.transform;
+        sr.anchorMin = new Vector2(.5f, 0); sr.anchorMax = new Vector2(1, 1); sr.offsetMin = new Vector2(10, 40); sr.offsetMax = new Vector2(-50, -200);
+    }
+
+    void Question(RectTransform parent, string label, string[] options, float chipW, Func<int> get, Action<int> set)
+    {
+        var q = Txt(parent, label, fBold, 28, Navy, TextAnchor.LowerLeft);
+        var qle = q.gameObject.AddComponent<LayoutElement>(); qle.preferredHeight = 42; qle.minHeight = 42;
+        var row = new GameObject("Opciones", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+        row.transform.SetParent(parent, false);
+        row.GetComponent<LayoutElement>().preferredHeight = 64; row.GetComponent<LayoutElement>().minHeight = 64;
+        var h = row.GetComponent<HorizontalLayoutGroup>(); h.spacing = 8; h.childAlignment = TextAnchor.MiddleLeft;
+        h.childControlWidth = true; h.childControlHeight = true; h.childForceExpandWidth = false; h.childForceExpandHeight = false;
+        for (int i = 0; i < options.Length; i++)
+        {
+            int idx = i; string lab = options[i];
+            var go = new GameObject("Op " + lab, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+            go.transform.SetParent(row.transform, false);
+            var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.pixelsPerUnitMultiplier = 44f / 32f;
+            var le = go.GetComponent<LayoutElement>(); le.preferredHeight = 64; le.preferredWidth = chipW > 0 ? chipW : 44 + lab.Length * 15;
+            var txt = Txt((RectTransform)go.transform, lab, fSemi, 25, Navy, TextAnchor.MiddleCenter); Stretch(txt.rectTransform);
+            txt.horizontalOverflow = HorizontalWrapMode.Overflow;
+            var b = go.GetComponent<Button>(); b.transition = Selectable.Transition.None; go.AddComponent<ChuwiPress>();
+            b.onClick.AddListener(() => { set(idx); RefreshSimulator(); });
+            simPaint.Add(() => { bool on = get() == idx; img.color = on ? Navy : Bg; txt.color = on ? White : Navy; });
+        }
+    }
+
+    void OpenSimulator()
+    {
+        RefreshSimulator();
+        sim.alpha = 1; sim.blocksRaycasts = true; sim.interactable = true;
+        StartCoroutine(PopIn((RectTransform)sim.transform.GetChild(1)));
+    }
+
+    void CloseSimulator() { sim.alpha = 0; sim.blocksRaycasts = false; sim.interactable = false; }
+
+    struct Req { public string text; public bool ok; public Req(string t, bool o) { text = t; ok = o; } }
+
+    void RefreshSimulator()
+    {
+        foreach (var p in simPaint) p();
+        for (int i = simResults.childCount - 1; i >= 0; i--) Destroy(simResults.GetChild(i).gameObject);
+        int cred = CredMin[simCred];
+        bool prom = simProm >= 1, sinPend = simPend == 0;
+
+        var inter = new List<Req>
+        {
+            new Req("Cursar el 5.º ciclo o más", simCiclo >= 5),
+            new Req("Mínimo 84 créditos aprobados", cred >= 84),
+            new Req("Cursos del 1.º al 4.º ciclo sin pendientes", sinPend),
+            new Req("Promedio de 13 o más (acumulado y último semestre) o tercio superior", prom),
+        };
+        var doble = new List<Req>
+        {
+            new Req("Cursar el 6.º ciclo o más", simCiclo >= 6),
+            new Req("Mínimo 105 créditos aprobados (Montpellier pide 120)", cred >= 105),
+            new Req("Cursos del 1.º al 5.º ciclo sin pendientes", sinPend),
+            new Req("Promedio de 13 o más o tercio superior", prom),
+        };
+        bool okI = inter.TrueForAll(x => x.ok), okD = doble.TrueForAll(x => x.ok);
+
+        // Mensaje de Chuwi
+        string msg;
+        if (okI && okD) msg = "¡Increíble! Cumples los requisitos académicos para Intercambio y Doble Grado. ¡A preparar tu postulación!";
+        else if (okI) msg = "¡Ya puedes postular a Intercambio!" + (simCiclo < 6 ? " Y desde el 6.º ciclo podrías ir por un Doble Grado." : "");
+        else if (simCiclo < 5) msg = "¡Vas bien encaminado! Todavía no puedes postular, pero desde el 5.º ciclo (en " + (5 - simCiclo) + (5 - simCiclo == 1 ? " ciclo" : " ciclos") + ") podrías irte de Intercambio.";
+        else msg = "Casi listo: revisa los puntos en rojo y conversa con la Oficina Internacional.";
+        var mc = NewCard(simResults, NavyDeep);
+        Txt(mc, msg, fBold, 30, White, TextAnchor.UpperLeft);
+
+        ProgramCard("Intercambio", "1 o 2 semestres · se convalidan los cursos", inter, okI);
+        ProgramCard("Doble Grado", "1 año · bachiller ESAN + bachiller extranjero", doble, okD);
+
+        // Inglés y programas cortos
+        var ing = NewCard(simResults, Bg);
+        Txt(ing, "Idioma", fBold, 30, Navy, TextAnchor.UpperLeft);
+        Txt(ing, simIngles == 2 ? "¡Bien! Con TOEFL 80 iBT o IELTS 6.0 cubres lo que piden la mayoría de destinos en inglés."
+            : simIngles == 1 ? "En Intercambio se acepta nivel B2 del idioma de clases. Para Doble Grado o varias socias piden TOEFL 80 iBT o IELTS 6.0."
+            : "Empieza a prepararte: piden TOEFL 80 iBT, IELTS 6.0 o similar (con writing, speaking y reading).", fRegular, 26, Muted, TextAnchor.UpperLeft);
+        Txt(ing, "Programas cortos (3 a 4 semanas): piden constancia de inglés intermedio o avanzado. " +
+            (simIngles > 0 ? "Con tu nivel de inglés podrías consultarlos." : "Cuando tengas tu constancia, podrías consultarlos."), fRegular, 26, Navy, TextAnchor.UpperLeft);
+
+        var fechas = NewCard(simResults, Cream);
+        var ft = Txt(fechas, "Convocatorias de Intercambio", fBold, 28, Orange, TextAnchor.UpperLeft); FlowChild(ft, 40);
+        Txt(fechas, "Hasta el 28 de febrero (viajas agosto–diciembre) y hasta el 30 de octubre (viajas marzo–julio del año siguiente). Doble Grado: fines de septiembre o fines de febrero.", fRegular, 26, Navy, TextAnchor.UpperLeft);
+
+        var go = BigButton(simResults, "Ver destinos", Red, White, iPlane, () => { CloseSimulator(); if (state == State.Welcome) StartApp(); });
+        var gle = go.gameObject.AddComponent<LayoutElement>(); gle.preferredHeight = 110; gle.minHeight = 110;
+        AddParagraph(simResults, "Simulación referencial con los requisitos publicados por la Oficina Internacional. Confirma tu caso con " + ChuwiDestinos.Contacto + ".", fRegular, 22, Muted);
+        simScroll.verticalNormalizedPosition = 1;
+    }
+
+    void ProgramCard(string name, string sub, List<Req> reqs, bool ok)
+    {
+        var c = NewCard(simResults, Bg);
+        var top = new GameObject("Cabecera", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+        top.transform.SetParent(c, false);
+        var h = top.GetComponent<HorizontalLayoutGroup>(); h.spacing = 14; h.childAlignment = TextAnchor.MiddleLeft;
+        h.childControlWidth = true; h.childControlHeight = true; h.childForceExpandWidth = false; h.childForceExpandHeight = false;
+        var nt = Txt((RectTransform)top.transform, name, fBlack, 36, Navy, TextAnchor.MiddleLeft);
+        nt.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1;
+        var pill = Pill((RectTransform)top.transform, ok ? "Puedes postular" : "Aún no", fBold, 24, ok ? Green : Muted, White, 52);
+        var ple = pill.gameObject.AddComponent<LayoutElement>(); ple.preferredWidth = ok ? 230 : 130; ple.preferredHeight = 52;
+        Txt(c, sub, fRegular, 24, Muted, TextAnchor.UpperLeft);
+
+        int met = 0; foreach (var r in reqs) if (r.ok) met++;
+        var track = new GameObject("Barra", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+        track.transform.SetParent(c, false);
+        var ti = track.GetComponent<Image>(); ti.sprite = sRound; ti.type = Image.Type.Sliced; ti.color = Line; ti.pixelsPerUnitMultiplier = 44f / 9f;
+        var tle = track.GetComponent<LayoutElement>(); tle.preferredHeight = 18; tle.minHeight = 18;
+        var fill = Img((RectTransform)track.transform, sRound, ok ? Green : Orange); fill.pixelsPerUnitMultiplier = 44f / 9f;
+        fill.rectTransform.anchorMin = Vector2.zero; fill.rectTransform.anchorMax = new Vector2(Mathf.Max(.06f, met / (float)reqs.Count), 1);
+        fill.rectTransform.offsetMin = fill.rectTransform.offsetMax = Vector2.zero;
+
+        foreach (var r in reqs)
+        {
+            var row = new GameObject("Req", typeof(RectTransform), typeof(HorizontalLayoutGroup));
+            row.transform.SetParent(c, false);
+            var rh = row.GetComponent<HorizontalLayoutGroup>(); rh.spacing = 14; rh.childAlignment = TextAnchor.UpperLeft;
+            rh.childControlWidth = true; rh.childControlHeight = true; rh.childForceExpandWidth = false; rh.childForceExpandHeight = false;
+            var dot = Img((RectTransform)row.transform, sCircle, r.ok ? Green : Red);
+            var dle = dot.gameObject.AddComponent<LayoutElement>(); dle.preferredWidth = 34; dle.preferredHeight = 34; dle.minWidth = 34;
+            var dt = Txt(dot.rectTransform, r.ok ? "Sí" : "No", fBold, 13, White, TextAnchor.MiddleCenter); Stretch(dt.rectTransform);
+            var rt = Txt((RectTransform)row.transform, r.text, r.ok ? fRegular : fSemi, 26, r.ok ? Navy : RedDark, TextAnchor.UpperLeft);
+            rt.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1;
+        }
     }
 
     void BuildTabs(ChuwiDestinos.Info info)
@@ -899,48 +1267,58 @@ public sealed class ChuwiUI : MonoBehaviour
             bool on = t.idx == infoTab;
             t.img.color = on ? Red : Bg; t.txt.color = on ? White : Navy;
         }
-        for (int i = infoContent.childCount - 1; i >= 0; i--) Destroy(infoContent.GetChild(i).gameObject);
-
-        AddParagraph(infoIntroText, fRegular, 30, Navy);
-        if (info == null || info.sections.Count == 0) return;
-        var sec = info.sections[Mathf.Clamp(infoTab, 0, info.sections.Count - 1)];
-        foreach (var it in sec.items) AddItemCard(it, sec.name);
-        if (!string.IsNullOrEmpty(sec.note))
-        {
-            var card = NewCard(Cream);
-            var t1 = Txt(card, sec.name == "Contacto" ? "Más información" : "Requisitos", fBold, 30, Orange, TextAnchor.UpperLeft); FlowChild(t1, 44);
-            var t2 = Txt(card, sec.note, fRegular, 27, Navy, TextAnchor.UpperLeft); FlowChild(t2, -1);
-        }
-        AddParagraph(ChuwiDestinos.Fuente, fRegular, 22, Muted);
+        ChuwiDestinos.Section sec = info != null && info.sections.Count > 0 ? info.sections[Mathf.Clamp(infoTab, 0, info.sections.Count - 1)] : null;
+        FillSection(infoContent, infoIntroText, sec);
         infoScroll.verticalNormalizedPosition = 1;
     }
 
-    void AddParagraph(string text, Font f, int size, Color c)
+    void FillSection(RectTransform content, string intro, ChuwiDestinos.Section sec)
     {
-        Txt(infoContent, text, f, size, c, TextAnchor.UpperLeft);
+        for (int i = content.childCount - 1; i >= 0; i--) Destroy(content.GetChild(i).gameObject);
+        if (!string.IsNullOrEmpty(intro)) AddParagraph(content, intro, fRegular, 30, Navy);
+        if (sec == null) return;
+        if (!string.IsNullOrEmpty(sec.lead))
+        {
+            var lc = NewCard(content, Hex("EAF0FB"));
+            Txt(lc, sec.lead, fSemi, 26, Navy, TextAnchor.UpperLeft);
+        }
+        foreach (var it in sec.items) AddItemCard(content, it, sec.name);
+        if (!string.IsNullOrEmpty(sec.note))
+        {
+            var card = NewCard(content, Cream);
+            if (!string.IsNullOrEmpty(sec.noteTitle)) { var t1 = Txt(card, sec.noteTitle, fBold, 30, Orange, TextAnchor.UpperLeft); FlowChild(t1, 44); }
+            var t2 = Txt(card, sec.note, fRegular, 27, Navy, TextAnchor.UpperLeft); FlowChild(t2, -1);
+        }
+        AddParagraph(content, ChuwiDestinos.Fuente, fRegular, 22, Muted);
     }
 
-    RectTransform NewCard(Color c)
+    void AddParagraph(RectTransform content, string text, Font f, int size, Color c)
+    {
+        Txt(content, text, f, size, c, TextAnchor.UpperLeft);
+    }
+
+    RectTransform NewCard(RectTransform content, Color c)
     {
         var go = new GameObject("Tarjeta", typeof(RectTransform), typeof(Image), typeof(VerticalLayoutGroup));
-        go.transform.SetParent(infoContent, false);
+        go.transform.SetParent(content, false);
         var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.color = c; img.pixelsPerUnitMultiplier = 44f / 28f;
         var v = go.GetComponent<VerticalLayoutGroup>(); v.padding = new RectOffset(32, 32, 26, 26); v.spacing = 6;
         v.childControlWidth = true; v.childControlHeight = true; v.childForceExpandHeight = false; v.childForceExpandWidth = true;
         return (RectTransform)go.transform;
     }
 
-    void AddItemCard(ChuwiDestinos.Item it, string section)
+    void AddItemCard(RectTransform content, ChuwiDestinos.Item it, string section)
     {
         var go = new GameObject("Item", typeof(RectTransform), typeof(Image), typeof(HorizontalLayoutGroup));
-        go.transform.SetParent(infoContent, false);
-        var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.color = Bg; img.pixelsPerUnitMultiplier = 44f / 28f;
+        go.transform.SetParent(content, false);
+        var img = go.GetComponent<Image>(); img.sprite = sRound; img.type = Image.Type.Sliced; img.color = it.warn ? Cream : Bg; img.pixelsPerUnitMultiplier = 44f / 28f;
         var h = go.GetComponent<HorizontalLayoutGroup>(); h.padding = new RectOffset(24, 28, 22, 22); h.spacing = 22;
         h.childAlignment = TextAnchor.MiddleLeft; h.childControlWidth = true; h.childControlHeight = true; h.childForceExpandWidth = false; h.childForceExpandHeight = false;
 
-        var icon = Img((RectTransform)go.transform, sCircle, section == "Becas" ? Orange : section == "Contacto" ? Navy : Red);
+        bool contact = section == "Contacto", beca = section == "Becas";
+        var icon = Img((RectTransform)go.transform, sCircle, it.warn ? Orange : beca ? Orange : contact ? Navy : Red);
         var ile = icon.gameObject.AddComponent<LayoutElement>(); ile.preferredWidth = 76; ile.preferredHeight = 76; ile.minWidth = 76;
-        var ii = Img(icon.rectTransform, section == "Contacto" ? iMail : section == "Becas" ? iStar : iPin, White);
+        var ii = Img(icon.rectTransform, contact ? iMail : beca ? iStar : iPin, White);
         Center(ii.rectTransform, Vector2.zero, new Vector2(42, 42));
 
         var col = new GameObject("Textos", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
@@ -948,7 +1326,16 @@ public sealed class ChuwiUI : MonoBehaviour
         col.GetComponent<LayoutElement>().flexibleWidth = 1;
         var v = col.GetComponent<VerticalLayoutGroup>(); v.spacing = 2; v.childControlWidth = true; v.childControlHeight = true; v.childForceExpandHeight = false;
         Txt((RectTransform)col.transform, it.title, fSemi, 30, Navy, TextAnchor.UpperLeft);
-        if (!string.IsNullOrEmpty(it.detail)) Txt((RectTransform)col.transform, it.detail, fRegular, 25, Muted, TextAnchor.UpperLeft);
+        if (!string.IsNullOrEmpty(it.detail))
+        {
+            if (it.warn)
+            {
+                int k = it.detail.LastIndexOf('\n');
+                if (k > 0) Txt((RectTransform)col.transform, it.detail.Substring(0, k), fRegular, 25, Muted, TextAnchor.UpperLeft);
+                Txt((RectTransform)col.transform, k > 0 ? it.detail.Substring(k + 1) : it.detail, fSemi, 24, RedDark, TextAnchor.UpperLeft);
+            }
+            else Txt((RectTransform)col.transform, it.detail, fRegular, 25, Muted, TextAnchor.UpperLeft);
+        }
     }
 
     static void FlowChild(Text t, float minH) { if (minH > 0) { var le = t.gameObject.AddComponent<LayoutElement>(); le.minHeight = minH; } }
@@ -1131,13 +1518,13 @@ public sealed class ChuwiUI : MonoBehaviour
         return r;
     }
 
-    RectTransform OutlineButton(RectTransform parent, string label, Color c, Action onClick)
+    RectTransform OutlineButton(RectTransform parent, string label, Color c, Action onClick, int size = 36)
     {
         var img = Img(parent, sOutline, c); img.raycastTarget = true; img.pixelsPerUnitMultiplier = 44f / 56f;
         var hit = Img(img.rectTransform, sRound, new Color(1, 1, 1, .12f)); Stretch(hit.rectTransform); hit.pixelsPerUnitMultiplier = 44f / 56f;
         var b = img.gameObject.AddComponent<Button>(); b.transition = Selectable.Transition.None; img.gameObject.AddComponent<ChuwiPress>();
         b.onClick.AddListener(() => onClick());
-        var t = Txt(img.rectTransform, label, fBold, 36, c, TextAnchor.MiddleCenter); Stretch(t.rectTransform);
+        var t = Txt(img.rectTransform, label, fBold, size, c, TextAnchor.MiddleCenter); Stretch(t.rectTransform);
         return img.rectTransform;
     }
 
