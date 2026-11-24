@@ -1,0 +1,10 @@
+Coros de himnos nacionales que suenan cuando Chuwi viaja a un país.
+
+Nombra cada audio con el código del país (mp3, ogg o wav):
+PE (Perú, al volver a ESAN), CA, US, MX, CO, BR, CL, AR, CN, KR, JP, TW, TH
+
+Ejemplo: US.mp3, JP.mp3, PE.mp3
+
+Si el archivo es el himno completo, en el objeto ChuwiUI > Ajustes Himnos agrega
+el código y el segundo donde empieza el coro (y cuántos segundos debe sonar).
+Si un país no tiene archivo, Chuwi viaja en silencio.

@@ -21,7 +21,34 @@ public sealed class ChuwiMapTravel : MonoBehaviour
     public float speed = 40;
     public float feetOffset;
     public float pinSize = 6;
+    [Tooltip("Escala del contenido AR (la pone ChuwiARFit al ajustar el mapa o al hacer zoom).")]
+    public float contentScale = 1;
     public bool previewWithoutMarker;
+    [Tooltip("Menu gris de depuracion (OnGUI). La interfaz ChuwiUI lo apaga.")]
+    public bool showDebugMenu = true;
+
+    // ---- API para la interfaz (ChuwiUI) ----
+    public event Action<int> Departed;
+    public event Action<int> Arrived;
+    public bool IsTracked => tracked;
+    public bool IsVisible => tracked || previewWithoutMarker;
+    public bool IsMoving => moving;
+    public int Selected => selected;
+    public Animator CharacterAnimator => animator;
+    public void SetPreview(bool value) { previewWithoutMarker = value; }
+    public void Dance() { if (animator != null && !moving) animator.SetTrigger("Dance"); }
+    public void Greet() { if (animator != null && !moving) animator.SetTrigger("Greeting"); }
+    public float TravelProgress
+    {
+        get
+        {
+            if (selected < 0 || character == null || destinations[selected].anchor == null) return 0;
+            float total = Vector3.Distance(transform.InverseTransformPoint(travelStart), transform.InverseTransformPoint(destinations[selected].anchor.position));
+            float left = Vector3.Distance(transform.InverseTransformPoint(character.position), transform.InverseTransformPoint(destinations[selected].anchor.position));
+            return total < .0001f ? 1 : Mathf.Clamp01(1 - left / total);
+        }
+    }
+    Vector3 travelStart;
     ObserverBehaviour observer;
     Animator animator;
     ChuwiKeyboardController keyboard;
@@ -44,7 +71,7 @@ public sealed class ChuwiMapTravel : MonoBehaviour
         mapRenderers = map != null ? map.GetComponentsInChildren<Renderer>(true) : new Renderer[0];
         greeted = false; moving = false; selected = -1;
         if (character != null && destinations != null && destinations.Length > 0)
-            character.position = transform.TransformPoint(transform.InverseTransformPoint(destinations[0].anchor.position) + Vector3.up * feetOffset);
+            character.position = transform.TransformPoint(transform.InverseTransformPoint(destinations[0].anchor.position) + Vector3.up * feetOffset * contentScale);
         if (observer != null) OnStatus(observer, observer.TargetStatus);
     }
     void OnDisable()
@@ -66,6 +93,8 @@ public sealed class ChuwiMapTravel : MonoBehaviour
     {
         if (!(tracked || previewWithoutMarker) || destinations == null || index < 0 || index >= destinations.Length || destinations[index].anchor == null) return;
         selected = index; moving = true;
+        travelStart = character != null ? character.position : Vector3.zero;
+        Departed?.Invoke(index);
         if (animator != null) { animator.ResetTrigger("Greeting"); animator.ResetTrigger("Pointing"); }
     }
     void LateUpdate()
@@ -83,10 +112,10 @@ public sealed class ChuwiMapTravel : MonoBehaviour
         if (!greeted) { greeted = true; if (animator != null) animator.SetTrigger("Greeting"); }
         if (moving && selected >= 0 && character != null)
         {
-            Vector3 goal = transform.InverseTransformPoint(destinations[selected].anchor.position) + Vector3.up * feetOffset;
+            Vector3 goal = transform.InverseTransformPoint(destinations[selected].anchor.position) + Vector3.up * feetOffset * contentScale;
             Vector3 current = transform.InverseTransformPoint(character.position);
             Vector3 delta = goal - current;
-            Vector3 next = Vector3.MoveTowards(current, goal, speed * Mathf.Max(0, deltaTime));
+            Vector3 next = Vector3.MoveTowards(current, goal, speed * contentScale * Mathf.Max(0, deltaTime));
             character.position = transform.TransformPoint(next);
             Vector3 forward = Vector3.ProjectOnPlane(transform.TransformDirection(delta), transform.up);
             if (forward.sqrMagnitude > .0001f)
@@ -95,6 +124,7 @@ public sealed class ChuwiMapTravel : MonoBehaviour
             if (!moving) character.position = transform.TransformPoint(goal);
             SetMoving(moving);
             if (!moving && animator != null) animator.SetTrigger("Pointing");
+            if (!moving) Arrived?.Invoke(selected);
         }
     }
     void ReadPointer()
@@ -109,7 +139,9 @@ public sealed class ChuwiMapTravel : MonoBehaviour
         pressed = Input.GetMouseButtonDown(0); point = Input.mousePosition;
 #endif
         float scale = Mathf.Max(1, Screen.height / 720f);
-        if (!pressed || point.x < 292 * scale || Camera.main == null) return;
+        if (!pressed || (showDebugMenu && point.x < 292 * scale) || Camera.main == null) return;
+        var es = UnityEngine.EventSystems.EventSystem.current;
+        if (es != null && es.IsPointerOverGameObject()) return;
         Ray ray = Camera.main.ScreenPointToRay(point);
         if (Physics.Raycast(ray, out RaycastHit hit))
             for (int i = 0; i < destinations.Length; i++)
@@ -117,7 +149,7 @@ public sealed class ChuwiMapTravel : MonoBehaviour
     }
     void OnGUI()
     {
-        if (destinations == null) return;
+        if (destinations == null || !showDebugMenu) return;
         float scale = Mathf.Max(1, Screen.height / 720f);
         Matrix4x4 old = GUI.matrix;
         GUI.matrix = Matrix4x4.TRS(Vector3.zero, Quaternion.identity, Vector3.one * scale);
